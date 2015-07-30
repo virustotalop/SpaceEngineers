@@ -26,38 +26,10 @@ using VRage.Utils;
 using VRage.Trace;
 using VRageMath;
 using Sandbox.Game.Screens.Terminal.Controls;
+using VRage.ModAPI;
 
 namespace Sandbox.Game.Entities.Blocks
 {
-    [ProtoContract]
-    struct ToolbarItem : IEqualityComparer<ToolbarItem>
-    {
-        [ProtoMember(1)]
-        public long EntityID;
-        [ProtoMember(2)]
-        public string GroupName;
-        [ProtoMember(3)]
-        public string Action;
-
-        public bool Equals(ToolbarItem x, ToolbarItem y)
-        {
-            if (x.EntityID != y.EntityID || x.GroupName != y.GroupName || x.Action != y.Action)
-                return false;
-            return true;
-        }
-
-        public int GetHashCode(ToolbarItem obj)
-        {
-            unchecked
-            {
-                int result = obj.EntityID.GetHashCode();
-                result = (result * 397) ^ obj.GroupName.GetHashCode();
-                result = (result * 397) ^ obj.Action.GetHashCode();
-                return result;
-            }
-        }
-    }
-
     [Flags]
     public enum MySensorFilterFlags : ushort
     {
@@ -86,6 +58,8 @@ namespace Sandbox.Game.Entities.Blocks
         private Color m_gizmoColor = new Vector4(0.1f, 0, 0, 0.1f);
         private const float m_maxGizmoDrawDistance = 200.0f;
         private BoundingBox m_gizmoBoundingBox = new BoundingBox();
+
+        private bool m_playProximitySound = true;
 
         private bool m_active = false;
         public bool IsActive
@@ -153,10 +127,27 @@ namespace Sandbox.Game.Entities.Blocks
             }
         }
 
+        public float MaxRange
+        {
+            get { return BlockDefinition.MaxRange; }
+        }
+
         public MySensorFilterFlags Filters
         {
             get;
             set;
+        }
+
+        public bool PlayProximitySound
+        {
+            get
+            {
+                return m_playProximitySound;
+            }
+            set
+            {                
+                m_playProximitySound = value;                
+            }
         }
 
         public bool DetectPlayers
@@ -337,7 +328,7 @@ namespace Sandbox.Game.Entities.Blocks
             MyTerminalControlFactory.AddControl(toolbarButton);
 
             var fieldWidthMin = new MyTerminalControlSlider<MySensorBlock>("Left", MySpaceTexts.BlockPropertyTitle_SensorFieldWidthMin, MySpaceTexts.BlockPropertyDescription_SensorFieldLeft);
-            fieldWidthMin.SetLimits(1, 50);
+            fieldWidthMin.SetLimits(block => 1, block => block.MaxRange);
             fieldWidthMin.DefaultValue = 5;
             fieldWidthMin.Getter = (x) => -x.m_fieldMin.X;
             fieldWidthMin.Setter = (x, v) =>
@@ -352,7 +343,7 @@ namespace Sandbox.Game.Entities.Blocks
             MyTerminalControlFactory.AddControl(fieldWidthMin);
 
             var fieldWidthMax = new MyTerminalControlSlider<MySensorBlock>("Right", MySpaceTexts.BlockPropertyTitle_SensorFieldWidthMax, MySpaceTexts.BlockPropertyDescription_SensorFieldRight);
-            fieldWidthMax.SetLimits(1, 50);
+            fieldWidthMax.SetLimits(block => 1, block => block.MaxRange);
             fieldWidthMax.DefaultValue = 5;
             fieldWidthMax.Getter = (x) => x.m_fieldMax.X;
             fieldWidthMax.Setter = (x, v) =>
@@ -368,7 +359,7 @@ namespace Sandbox.Game.Entities.Blocks
 
 
             var fieldHeightMin = new MyTerminalControlSlider<MySensorBlock>("Bottom", MySpaceTexts.BlockPropertyTitle_SensorFieldHeightMin, MySpaceTexts.BlockPropertyDescription_SensorFieldBottom);
-            fieldHeightMin.SetLimits(1, 50);
+            fieldHeightMin.SetLimits(block => 1, block => block.MaxRange);
             fieldHeightMin.DefaultValue = 5;
             fieldHeightMin.Getter = (x) => -x.m_fieldMin.Y;
             fieldHeightMin.Setter = (x, v) =>
@@ -383,7 +374,7 @@ namespace Sandbox.Game.Entities.Blocks
             MyTerminalControlFactory.AddControl(fieldHeightMin);
 
             var fieldHeightMax = new MyTerminalControlSlider<MySensorBlock>("Top", MySpaceTexts.BlockPropertyTitle_SensorFieldHeightMax, MySpaceTexts.BlockPropertyDescription_SensorFieldTop);
-            fieldHeightMax.SetLimits(1, 50);
+            fieldHeightMax.SetLimits(block => 1, block => block.MaxRange);
             fieldHeightMax.DefaultValue = 5;
             fieldHeightMax.Getter = (x) => x.m_fieldMax.Y;
             fieldHeightMax.Setter = (x, v) =>
@@ -398,7 +389,7 @@ namespace Sandbox.Game.Entities.Blocks
             MyTerminalControlFactory.AddControl(fieldHeightMax);
 
             var fieldDepthMax = new MyTerminalControlSlider<MySensorBlock>("Back", MySpaceTexts.BlockPropertyTitle_SensorFieldDepthMax, MySpaceTexts.BlockPropertyDescription_SensorFieldBack);
-            fieldDepthMax.SetLimits(1, 50);
+            fieldDepthMax.SetLimits(block => 1, block => block.MaxRange);
             fieldDepthMax.DefaultValue = 5;
             fieldDepthMax.Getter = (x) => x.m_fieldMax.Z;
             fieldDepthMax.Setter = (x, v) =>
@@ -413,7 +404,7 @@ namespace Sandbox.Game.Entities.Blocks
             MyTerminalControlFactory.AddControl(fieldDepthMax);
 
             var fieldDepthMin = new MyTerminalControlSlider<MySensorBlock>("Front", MySpaceTexts.BlockPropertyTitle_SensorFieldDepthMin, MySpaceTexts.BlockPropertyDescription_SensorFieldFront);
-            fieldDepthMin.SetLimits(1, 50);
+            fieldDepthMin.SetLimits(block => 1, block => block.MaxRange);
             fieldDepthMin.DefaultValue = 5;
             fieldDepthMin.Getter = (x) => -x.m_fieldMin.Z;
             fieldDepthMin.Setter = (x, v) =>
@@ -429,6 +420,15 @@ namespace Sandbox.Game.Entities.Blocks
 
             var separatorFilters = new MyTerminalControlSeparator<MySensorBlock>();
             MyTerminalControlFactory.AddControl(separatorFilters);
+
+            var detectPlayProximitySoundSwitch = new MyTerminalControlOnOffSwitch<MySensorBlock>("Audible Proximity Alert", MySpaceTexts.BlockPropertyTitle_SensorPlaySound, MySpaceTexts.BlockPropertyTitle_SensorPlaySound);
+            detectPlayProximitySoundSwitch.Getter = (x) => x.PlayProximitySound;
+            detectPlayProximitySoundSwitch.Setter = (x, v) =>
+            {
+                x.PlayProximitySound = v;
+                (x.SyncObject as MySyncSensorBlock).SendChangeSensorPlaySoundRequest(x.PlayProximitySound);
+            };                   
+            MyTerminalControlFactory.AddControl(detectPlayProximitySoundSwitch);
 
             var detectPlayersSwitch = new MyTerminalControlOnOffSwitch<MySensorBlock>("Detect Players", MySpaceTexts.BlockPropertyTitle_SensorDetectPlayers, MySpaceTexts.BlockPropertyTitle_SensorDetectPlayers);
             detectPlayersSwitch.Getter = (x) => x.DetectPlayers;
@@ -564,10 +564,11 @@ namespace Sandbox.Game.Entities.Blocks
             Toolbar.DrawNumbers = false;
 
             var builder = (MyObjectBuilder_SensorBlock)objectBuilder;
+            
+            m_fieldMin = Vector3.Clamp(builder.FieldMin, new Vector3(-MaxRange), -Vector3.One);
+            m_fieldMax = Vector3.Clamp(builder.FieldMax, Vector3.One, new Vector3(MaxRange));
 
-            m_fieldMin = Vector3.Clamp(builder.FieldMin, new Vector3(-50.0f), -Vector3.One);
-            m_fieldMax = Vector3.Clamp(builder.FieldMax, Vector3.One, new Vector3(50.0f));
-
+            PlayProximitySound = builder.PlaySound;
             DetectPlayers = builder.DetectPlayers;
             DetectFloatingObjects = builder.DetectFloatingObjects;
             DetectSmallShips = builder.DetectSmallShips;
@@ -588,7 +589,7 @@ namespace Sandbox.Game.Entities.Blocks
                 if (item == null)
                     continue;
                 m_items.RemoveAt(i);
-                m_items.Insert(i, GetToolbarItem(item));
+                m_items.Insert(i, ToolbarItem.FromItem(item));
             }
             Toolbar.ItemChanged += Toolbar_ItemChanged;
 
@@ -718,6 +719,7 @@ namespace Sandbox.Game.Entities.Blocks
             ob.FieldMin = FieldMin;
             ob.FieldMax = FieldMax;
 
+            ob.PlaySound = PlayProximitySound;
             ob.DetectPlayers = DetectPlayers;
             ob.DetectFloatingObjects = DetectFloatingObjects;
             ob.DetectSmallShips = DetectSmallShips;
@@ -738,7 +740,7 @@ namespace Sandbox.Game.Entities.Blocks
         {
             Debug.Assert(self == Toolbar);
 
-            var tItem = GetToolbarItem(self.GetItemAtIndex(index.ItemIndex));
+            var tItem = ToolbarItem.FromItem(self.GetItemAtIndex(index.ItemIndex));
             var oldItem = m_items[index.ItemIndex];
             if ((tItem.EntityID == 0 && oldItem.EntityID == 0 || (tItem.EntityID != 0 && oldItem.EntityID != 0 && tItem.Equals(oldItem))))
                 return;
@@ -763,32 +765,12 @@ namespace Sandbox.Game.Entities.Blocks
             }
         }
 
-        private ToolbarItem GetToolbarItem(MyToolbarItem item)
-        {
-            var tItem = new ToolbarItem();
-            tItem.EntityID = 0;
-            if (item is MyToolbarItemTerminalBlock)
-            {
-                var block = item.GetObjectBuilder() as MyObjectBuilder_ToolbarItemTerminalBlock;
-                tItem.EntityID = block.BlockEntityId;
-                tItem.Action = block.Action;
-            }
-            else if (item is MyToolbarItemTerminalGroup)
-            {
-                var block = item.GetObjectBuilder() as MyObjectBuilder_ToolbarItemTerminalGroup;
-                tItem.EntityID = block.BlockEntityId;
-                tItem.Action = block.Action;
-                tItem.GroupName = block.GroupName;
-            }
-            return tItem;
-        }
-
         private void OnFirstEnter()
         {
             UpdateEmissivity();
             Toolbar.UpdateItem(0);
             if (Sync.IsServer)
-                Toolbar.ActivateItemAtSlot(0);
+                Toolbar.ActivateItemAtSlot(0, false, PlayProximitySound);
         }
 
         private void OnLastLeave()
@@ -796,7 +778,7 @@ namespace Sandbox.Game.Entities.Blocks
             UpdateEmissivity();
             Toolbar.UpdateItem(1);
             if (Sync.IsServer)
-                Toolbar.ActivateItemAtSlot(1);
+                Toolbar.ActivateItemAtSlot(1, false, PlayProximitySound);
         }
 
         public bool ShouldDetectRelation(MyRelationsBetweenPlayerAndBlock relation)
@@ -806,6 +788,7 @@ namespace Sandbox.Game.Entities.Blocks
                 case MyRelationsBetweenPlayerAndBlock.Owner:
                     return DetectOwner;
                     break;
+                case MyRelationsBetweenPlayerAndBlock.NoOwnership:
                 case MyRelationsBetweenPlayerAndBlock.FactionShare:
                     return DetectFriendly;
                     break;
@@ -897,7 +880,7 @@ namespace Sandbox.Game.Entities.Blocks
             var boundingBox = new BoundingBoxD(m_fieldMin, m_fieldMax).Translate(PositionComp.LocalVolume.Center).Transform(WorldMatrix.GetOrientation()).Translate(PositionComp.GetPosition());
 
             m_potentialPenetrations.Clear();
-            MyGamePruningStructure.GetAllSensableEntitiesInBox<MyEntity>(ref boundingBox, m_potentialPenetrations);
+            MyGamePruningStructure.GetAllTopMostEntitiesInBox<MyEntity>(ref boundingBox, m_potentialPenetrations);
 
             VRageRender.MyRenderProxy.GetRenderProfiler().StartProfilingBlock("Sensor Physics");
             LastDetectedEntity = null;
@@ -1060,6 +1043,7 @@ namespace Sandbox.Game.Entities.Blocks
         float ModAPI.Ingame.IMySensorBlock.BottomExtend { get { return -m_fieldMin.Y; } }
         float ModAPI.Ingame.IMySensorBlock.FrontExtend { get { return -m_fieldMin.Z; } }
         float ModAPI.Ingame.IMySensorBlock.BackExtend { get { return m_fieldMax.Z; } }
+        bool ModAPI.Ingame.IMySensorBlock.PlayProximitySound { get { return PlayProximitySound; } }
         bool ModAPI.Ingame.IMySensorBlock.DetectPlayers { get { return DetectPlayers; } }
         bool ModAPI.Ingame.IMySensorBlock.DetectFloatingObjects { get { return DetectFloatingObjects; } }
         bool ModAPI.Ingame.IMySensorBlock.DetectSmallShips { get { return DetectSmallShips; } }

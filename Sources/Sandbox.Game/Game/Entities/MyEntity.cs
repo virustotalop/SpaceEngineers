@@ -30,16 +30,20 @@ using Sandbox.Game.Entities.Character;
 using VRage;
 using Sandbox.Game.Components;
 using VRage;
+using VRage.Components;
+using VRage.ModAPI;
+using VRage.ObjectBuilders;
 
 #endregion
 
 namespace Sandbox.Game.Entities
 {
-    public abstract partial class MyEntity
+    [MyEntityType(typeof(MyObjectBuilder_EntityBase))]
+    public partial class MyEntity
     {
         #region Fields
 
-        public MyComponentContainer Components { get; private set; }
+        public MyEntityComponentContainer Components { get; private set; }
 
         public string Name;
 
@@ -61,7 +65,7 @@ namespace Sandbox.Game.Entities
         {
             foreach (var child in this.Hierarchy.Children)
             {
-                child.Entity.DebugDraw();
+                child.Container.Entity.DebugDraw();
             }
 
             foreach (var render in m_debugRenderers)
@@ -82,13 +86,18 @@ namespace Sandbox.Game.Entities
             m_debugRenderers.Add(render);
         }
 
+        public void ClearDebugRenderComponents()
+        {
+            m_debugRenderers.Clear();
+        }
+
         //Rendering
         protected MyModel m_modelCollision;                       //  Collision model, used only for collisions
 
         //Space query structure
         public int GamePruningProxyId = MyConstants.PRUNING_PROXY_ID_UNITIALIZED;
+        public int TopMostPruningProxyId = MyConstants.PRUNING_PROXY_ID_UNITIALIZED;
         public int TargetPruningProxyId = MyConstants.PRUNING_PROXY_ID_UNITIALIZED;
-        public int SensablePruningProxyId = MyConstants.PRUNING_PROXY_ID_UNITIALIZED;
 
         #endregion
 
@@ -225,7 +234,7 @@ namespace Sandbox.Game.Entities
         /// <value>
         /// The parent.
         /// </value>
-        public MyEntity Parent { get { return m_hierarchy != null && m_hierarchy.Parent != null ? m_hierarchy.Parent.CurrentContainer.Entity as MyEntity : null; } private set { m_hierarchy.Parent = value.Components.Get<MyHierarchyComponentBase>(); } }
+        public MyEntity Parent { get { return m_hierarchy != null && m_hierarchy.Parent != null ? m_hierarchy.Parent.Container.Entity as MyEntity : null; } private set { m_hierarchy.Parent = value.Components.Get<MyHierarchyComponentBase>(); } }
 
         /// <summary>
         /// Return top most parent of this entity
@@ -321,20 +330,25 @@ namespace Sandbox.Game.Entities
         public void UpdateGamePruningStructure()
         {
             MyGamePruningStructure.Move(this);
-            foreach (var child in Hierarchy.Children) child.Entity.UpdateGamePruningStructure();
+            foreach (var child in Hierarchy.Children) child.Container.Entity.UpdateGamePruningStructure();
         }
 
         public void AddToGamePruningStructure()
         {
             MyGamePruningStructure.Add(this);
             foreach (var child in Hierarchy.Children)
-                child.Entity.AddToGamePruningStructure();
+                child.Container.Entity.AddToGamePruningStructure();
         }
 
         public void RemoveFromGamePruningStructure()
         {
             MyGamePruningStructure.Remove(this);
-            foreach (var child in Hierarchy.Children) child.Entity.RemoveFromGamePruningStructure();
+
+            if (Hierarchy != null)
+            {
+                foreach (var child in Hierarchy.Children)
+                    child.Container.Entity.RemoveFromGamePruningStructure();
+            }
         }
 
         protected virtual bool CanBeAddedToRender()
@@ -392,12 +406,17 @@ namespace Sandbox.Game.Entities
 
         //public StackTrace CreationStack = new StackTrace(true);
 
+        public MyEntity()
+            : this(true)
+        {
+        }
+
         /// <summary>
         /// Initializes a new instance of the <see cref="MyEntity"/> class.
         /// </summary>
-        protected MyEntity(bool initComponents = true)
+        public MyEntity(bool initComponents = true)
         {
-            Components = new MyComponentContainer(this);
+            Components = new MyEntityComponentContainer(this);
             Components.ComponentAdded += Components_ComponentAdded;
             Components.ComponentRemoved += Components_ComponentRemoved;
 
@@ -422,7 +441,7 @@ namespace Sandbox.Game.Entities
             }
         }
 
-        void Components_ComponentAdded(Type t, Sandbox.Common.Components.MyComponentBase c)
+        void Components_ComponentAdded(Type t, MyEntityComponentBase c)
         {
             if (t == typeof(MyPhysicsComponentBase))
                 m_physics = c as MyPhysicsBody;
@@ -440,7 +459,7 @@ namespace Sandbox.Game.Entities
             }
         }
 
-        void Components_ComponentRemoved(Type t, Sandbox.Common.Components.MyComponentBase c)
+        void Components_ComponentRemoved(Type t, MyEntityComponentBase c)
         {
             if (t == typeof(MyPhysicsComponentBase))
                 m_physics = null;
@@ -612,7 +631,7 @@ namespace Sandbox.Game.Entities
         {
             foreach (var child in Hierarchy.Children)
             {
-                (child.Entity as MyEntity).DebugDrawPhysics();
+                (child.Container.Entity as MyEntity).DebugDrawPhysics();
             }
 
             if (this.m_physics == null)
@@ -787,100 +806,6 @@ namespace Sandbox.Game.Entities
         #region Entity events
 
         /// <summary>
-        /// Notifies sub dependent resources about entity change.
-        /// </summary>
-        /// <param name="source">Source of change-or-null if unknown.</param>
-        private void NotifyEntityChange(object source)
-        {
-            //Like to be Obsolete
-
-            {
-                var notifier = Physics;
-
-                if (notifier != null && notifier != source)
-                {
-                    notifier.OnWorldPositionChanged(source);
-                }
-            }
-
-            {
-                var notifier = this;
-
-                if (notifier != source)
-                {
-                    notifier.PositionComp.OnWorldPositionChanged(source);
-                }
-            }
-        }
-
-        ///// <summary>
-        ///// Called on some contact start with this entity.
-        ///// </summary>
-        ///// <param name="contactInfo">The contact info.</param>
-        //protected virtual void OnContactStart(MyContactEventInfo contactInfo)
-        //{
-        //    VRageRender.MyRenderProxy.GetRenderProfiler().StartProfilingBlock("MyEntity::OnContactStart");
-
-        //    if (this.m_physics.PlayCollisionCueEnabled)
-        //    {
-        //          MyAudio.Static.PlayCollisionCue(contactInfo, MyMaterialsConstants.MyMaterialCollisionType.Start);
-        //    }
-
-        //    if (MyMwcFinalBuildConstants.DrawCollisionSpotsInHud)
-        //    {
-        //        MyHud.DebugClearAndAddText(contactInfo.m_ContactPoint, new StringBuilder("COLLISION POINT"));
-        //    } 
-
-        //    VRageRender.MyRenderProxy.GetRenderProfiler().EndProfilingBlock();
-        //}
-
-        ///// <summary>
-        ///// Called on some contact end with this entity.
-        ///// </summary>
-        ///// <param name="contactInfo">The contact info.</param>
-        //protected virtual void OnContactEnd(MyContactEventInfo contactInfo)
-        //{
-        //    if (this.m_physics.PlayCollisionCueEnabled)
-        //    {
-        //          MyAudio.Static.PlayCollisionCue(contactInfo, MyMaterialsConstants.MyMaterialCollisionType.End);
-        //    }
-        //}
-
-        ///// <summary>
-        ///// Called when [contact touches] with this entity.
-        ///// </summary>
-        ///// <param name="contactInfo">The contact info.</param>
-        //protected virtual void OnContactTouch(MyContactEventInfo contactInfo)
-        //{
-        //    if (this.m_physics.PlayCollisionCueEnabled)
-        //    {
-        //          MyAudio.Static.PlayCollisionCue(contactInfo, MyMaterialsConstants.MyMaterialCollisionType.Touch);
-        //    }
-        //}
-
-        ///// <summary>
-        ///// Called when [contact] with entity.
-        ///// </summary>
-        ///// <param name="constraint">The constraint.</param>
-        ///// <returns></returns>
-        //protected virtual bool OnContact(ref MyRBSolverConstraint constraint)
-        //{
-        //    if (OnContactEvent != null)
-        //    {
-        //        OnContactEvent(constraint.GetOtherEntity(this));
-        //    }
-
-        //    return true;
-        //}
-
-        /// <summary>
-        /// Called when [deserialized].
-        /// </summary>
-        protected virtual void OnDeserialized()
-        {
-        }
-
-        /// <summary>
         /// Called when [activated] which for entity means that was added to scene.
         /// </summary>
         /// <param name="source">The source of activation.</param>
@@ -914,17 +839,22 @@ namespace Sandbox.Game.Entities
             AddToGamePruningStructure();
             VRageRender.MyRenderProxy.GetRenderProfiler().EndProfilingBlock();
 
+            Components.OnAddedToScene();
 
             foreach (var child in Hierarchy.Children)
             {
-                child.Entity.OnAddedToScene(source);
+                child.Container.Entity.OnAddedToScene(source);
             }
 
             if (MyFakes.ENABLE_ASTEROID_FIELDS)
             {
-                Sandbox.Game.World.Generator.MyAsteroidCellGenerator.Static.TrackEntity(this);
+                if (Sandbox.Game.World.Generator.MyProceduralWorldGenerator.Static != null)
+                {
+                    Sandbox.Game.World.Generator.MyProceduralWorldGenerator.Static.TrackEntity(this);
+                }
             }
 
+            MyWeldingGroups.Static.AddNode(this);
             VRageRender.MyRenderProxy.GetRenderProfiler().EndProfilingBlock();
         }
 
@@ -933,10 +863,18 @@ namespace Sandbox.Game.Entities
         {
             InScene = false;
 
-            foreach (var child in Hierarchy.Children)
+            if(MyWeldingGroups.Static.GetGroup(this) != null) //because of weird handling of weapons
+                MyWeldingGroups.Static.RemoveNode(this);
+
+            if (Hierarchy != null)
             {
-                child.Entity.OnRemovedFromScene(source);
+                foreach (var child in Hierarchy.Children)
+                {
+                    child.Container.Entity.OnRemovedFromScene(source);
+                }
             }
+
+            Components.OnRemovedFromScene();
 
             MyEntities.UnregisterForUpdate(this);
             MyEntities.UnregisterForDraw(this);
@@ -977,26 +915,13 @@ namespace Sandbox.Game.Entities
                 handler(this);
         }
 
-        #region Implementation of INotifyMemberChanged
-
-        /// <summary>
-        /// Called when [member changed].
-        /// </summary>
-        /// <param name="memberInfo">The member info.</param>
-        public void OnMemberChanged(MemberInfo memberInfo)
-        {
-            {
-                PositionComp.UpdateWorldMatrix(null);
-            }
-        }
-
-        #endregion
-
         #region Drawing, objectbuilder, init & close
 
         public virtual void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
             ProfilerShort.Begin("MyEntity.Init(objectBuilder)");
+            MarkedForClose = false;
+            Closed = false;
             this.Render.PersistentFlags = MyPersistentEntityFlags2.CastShadows;
             if (objectBuilder != null)
             {
@@ -1018,6 +943,8 @@ namespace Sandbox.Game.Entities
                     this.EntityId = objectBuilder.EntityId;
                 this.Name = objectBuilder.Name;
                 this.Render.PersistentFlags = objectBuilder.PersistentFlags;
+
+                this.Components.Deserialize(objectBuilder.ComponentContainer);
             }
 
             AllocateEntityID();
@@ -1062,13 +989,15 @@ namespace Sandbox.Game.Entities
         }
 
         //  This is real initialization of this class!!! Instead of constructor.
-        public void Init(StringBuilder displayName,
+        public virtual void Init(StringBuilder displayName,
                          string model,
                          MyEntity parentObject,
                          float? scale,
                          string modelCollision = null)
         {
             ProfilerShort.Begin("MyEntity.Init(...models...)");
+            MarkedForClose = false;
+            Closed = false;
             this.Render.PersistentFlags = MyPersistentEntityFlags2.CastShadows;
             this.DisplayName = displayName != null ? displayName.ToString() : null;
 
@@ -1136,6 +1065,10 @@ namespace Sandbox.Game.Entities
                         subpart.Render.EnableColorMaskHsv = Render.EnableColorMaskHsv;
                         subpart.Render.ColorMaskHsv = Render.ColorMaskHsv;
                         subpart.Init(null, data.File, this, null);
+
+                        // Set this to false becase no one else is responsible for rendering subparts
+                        subpart.Render.NeedsDrawFromParent = false;
+                        
                         subpart.PositionComp.LocalMatrix = data.InitialTransform;
                         Subparts[data.Name] = subpart;
 
@@ -1184,7 +1117,7 @@ namespace Sandbox.Game.Entities
                 MyHierarchyComponentBase compToRemove = Hierarchy.Children[Hierarchy.Children.Count - 1];
                 Debug.Assert(compToRemove.Parent != null, "Entity has no parent but is part of children collection");
 
-                compToRemove.Entity.Delete();
+                compToRemove.Container.Entity.Delete();
 
                 Hierarchy.Children.Remove(compToRemove);
             }
@@ -1230,6 +1163,10 @@ namespace Sandbox.Game.Entities
             Debug.Assert(this.Hierarchy.Children.Count == 0);
 
             CallAndClearOnClose();
+
+			Components.Clear();
+
+            ClearDebugRenderComponents();
 
             Closed = true;
         }
@@ -1302,6 +1239,8 @@ namespace Sandbox.Game.Entities
 
                 objBuilder.Name = this.Name;
                 objBuilder.PersistentFlags = Render.PersistentFlags;
+
+                objBuilder.ComponentContainer = Components.Serialize();
             }
             return objBuilder;
         }
@@ -1313,37 +1252,6 @@ namespace Sandbox.Game.Entities
         {
 
         }
-
-        /// <summary>
-        /// IsSelectable
-        /// </summary>
-        /// <returns></returns>
-        public virtual bool IsSelectable()
-        {
-            return MyEntities.IsSelectable(this);
-        }
-
-        /// <summary>
-        /// When selecting children component(this), ask weather it can be selected separately
-        /// without selecting and highlighting its parent
-        /// </summary>
-        /// <returns></returns>
-        public virtual bool IsSelectableAsChild()
-        {
-            return false;
-        }
-
-        /// <summary>
-        /// When selected parent component(this), ask weather its children components will be
-        /// selected and highlighted too
-        /// </summary>
-        /// <returns></returns>
-        public virtual bool IsSelectableParentOnly()
-        {
-            return false;
-        }
-
-
 
         /// <summary>
         /// Method is called defacto from Update, preparation fo Draw

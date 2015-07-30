@@ -27,15 +27,24 @@ namespace VRageRender
 
     struct MyProjectionInfo
     {
-        internal Matrix WorldToProjection;
+        internal MatrixD WorldToProjection;
         internal Matrix LocalToProjection;
         internal Vector3D WorldCameraOffsetPosition;
 
-        internal Matrix CurrentLocalToProjection { get { return Matrix.CreateTranslation(MyEnvironment.CameraPosition - WorldCameraOffsetPosition) * LocalToProjection; } }
+        internal Matrix CurrentLocalToProjection { get { return MatrixD.CreateTranslation(MyEnvironment.CameraPosition - WorldCameraOffsetPosition) * (MatrixD)LocalToProjection; } }
+    }
+
+    class MyLightsCameraDistanceComparer : IComparer<LightId> {
+
+        public int Compare(LightId x, LightId y)
+        {
+            return x.ViewerDistanceSquared.CompareTo(y.ViewerDistanceSquared);
+        }
     }
 
     class MyShadows : MyImmediateRC
     {
+        const int MAX_SPOTLIGHT_SHADOWCASTERS = 20;
         const bool VisualizeDebug = false;
 
         internal struct MyShadowmapQuery
@@ -51,6 +60,7 @@ namespace VRageRender
         }
 
         internal static RwTexId m_cascadeShadowmapArray = RwTexId.NULL;
+        internal static RwTexId m_cascadeShadowmapBackup = RwTexId.NULL;
         internal static ConstantsBufferId m_csmConstants;
         static int m_cascadeResolution;
         static int m_cascadesNum;
@@ -67,17 +77,22 @@ namespace VRageRender
         static VertexShaderId m_markVS;
         static PixelShaderId m_markPS;
 
+        static MyLightsCameraDistanceComparer m_spotlightCastersComparer = new MyLightsCameraDistanceComparer();
+
         internal static void ResizeCascades()
         {
             if (m_cascadeShadowmapArray != RwTexId.NULL)
             {
                 MyRwTextures.Destroy(m_cascadeShadowmapArray);
+                MyRwTextures.Destroy(m_cascadeShadowmapBackup);
             }
 
             m_cascadeResolution = MyRender11.m_renderSettings.ShadowQuality.Resolution();
 
             m_cascadeShadowmapArray = MyRwTextures.CreateShadowmapArray(m_cascadeResolution, m_cascadeResolution,
                 m_cascadesNum, Format.R24G8_Typeless, Format.D24_UNorm_S8_UInt, Format.R24_UNorm_X8_Typeless, "cascades shadowmaps");
+            m_cascadeShadowmapBackup = MyRwTextures.CreateShadowmapArray(m_cascadeResolution, m_cascadeResolution,
+                m_cascadesNum, Format.R24G8_Typeless, Format.D24_UNorm_S8_UInt, Format.R24_UNorm_X8_Typeless, "cascades shadowmaps backup");
         }
 
         internal unsafe static void Init()
@@ -130,7 +145,14 @@ namespace VRageRender
 
         static void PrepareSpotlights()
         {
-            MyLights.SpotlightsBvh.OverlapAllFrustum(ref MyEnvironment.ViewFrustum, MyLightRendering.VisibleSpotlights);
+            MyLights.SpotlightsBvh.OverlapAllFrustum(ref MyEnvironment.ViewFrustumClippedD, MyLightRendering.VisibleSpotlights);
+
+            MyLightRendering.VisibleSpotlights.Sort(m_spotlightCastersComparer);
+            while (MyLightRendering.VisibleSpotlights.Count > MAX_SPOTLIGHT_SHADOWCASTERS)
+            {
+                MyLightRendering.VisibleSpotlights.RemoveAtFast(MyLightRendering.VisibleSpotlights.Count - 1);
+            }
+
             MyArrayHelpers.Reserve(ref MyLightRendering.Spotlights, MyLightRendering.VisibleSpotlights.Count);
 
             int index = 0;
@@ -148,8 +170,8 @@ namespace VRageRender
                         query.IgnoredEntities = MyLights.IgnoredEntitites[id];
                     }
 
-                    var shadowMatrix = Matrix.CreateLookAt(id.Position, id.Position + MyLights.Spotlights[id.Index].Direction, MyLights.Spotlights[id.Index].Up) *
-                        Matrix.CreatePerspectiveFieldOfView((float)(Math.Acos(MyLights.Spotlights[id.Index].ApertureCos) * 2), 1.0f, 0.5f, id.ShadowDistance);
+                    var shadowMatrix = MatrixD.CreateLookAt(id.Position, id.Position + MyLights.Spotlights[id.Index].Direction, MyLights.Spotlights[id.Index].Up) *
+                        MatrixD.CreatePerspectiveFieldOfView((float)(Math.Acos(MyLights.Spotlights[id.Index].ApertureCos) * 2), 1.0f, 0.5f, id.ShadowDistance);
 
                     if(ShadowmapsPool.Count <= casterIndex)
                     {
@@ -163,7 +185,7 @@ namespace VRageRender
                     {
                         WorldCameraOffsetPosition = MyEnvironment.CameraPosition,
                         WorldToProjection = shadowMatrix,
-                        LocalToProjection = Matrix.CreateTranslation(MyEnvironment.CameraPosition) * shadowMatrix
+                        LocalToProjection = MatrixD.CreateTranslation(MyEnvironment.CameraPosition) * shadowMatrix
                     };
 
                     MyLightRendering.Spotlights[index].ShadowMatrix = Matrix.Transpose(query.ProjectionInfo.CurrentLocalToProjection * MyMatrixHelpers.ClipspaceToTexture);
@@ -194,6 +216,8 @@ namespace VRageRender
 
         static void PrepareCascades()
         {
+            MyImmediateRC.RC.Context.CopyResource(m_cascadeShadowmapArray.Resource, m_cascadeShadowmapBackup.Resource);
+
             bool stabilize = true;
 
             for (int i = 0; i < 4; i++)
@@ -507,7 +531,7 @@ namespace VRageRender
 
             for(int i=0; i<m_cascadesNum; i++)
             {
-                RC.SetDS(MyDepthStencilState.MarkIfInside[i], 1 << i);
+                RC.SetDS(MyDepthStencilState.MarkIfInsideCascade[i], 1 << i);
                 // mark ith bit on depth near
                 RC.Context.DrawIndexed(36, 0, 8 * i);
             }

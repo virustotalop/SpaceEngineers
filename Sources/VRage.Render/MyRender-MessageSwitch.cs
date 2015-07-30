@@ -163,7 +163,8 @@ namespace VRageRender
                             rMessage.Technique,
                             rMessage.Flags,
                             rMessage.AtmosphereRadius,
-                            rMessage.PlanetRadius
+                            rMessage.PlanetRadius,
+                            rMessage.AtmosphereWavelengths
                         );
                         ProfilerShort.End();
 
@@ -370,14 +371,17 @@ namespace VRageRender
                         //m_renderObjects.Remove(rMessage.ID);
 
                         MyManualCullableRenderObject manualCullObject = GetRenderObject(rMessage.CullObjectID) as MyManualCullableRenderObject;
-                        RemoveRenderObject(manualCullObject);
+                        if (manualCullObject != null)
+                        {
+                            RemoveRenderObject(manualCullObject);
 
-                        manualCullObject.AddRenderObject(renderObject, (MatrixD?)rMessage.ChildToParent);
+                            manualCullObject.AddRenderObject(renderObject, (MatrixD?)rMessage.ChildToParent);
 
-                        AddRenderObject(manualCullObject);
-
-
-
+                            AddRenderObject(manualCullObject);
+                        }
+                        else
+                        { 
+                        }
                         break;
                     }
 
@@ -410,8 +414,11 @@ namespace VRageRender
 
                             foreach (var effect in m_effects)
                             {
-                                effect.SetNearPlane(MyRenderCamera.NEAR_PLANE_DISTANCE);
-                                effect.SetFarPlane(MyRenderCamera.FAR_PLANE_DISTANCE);
+                                if (effect != null)
+                                {
+                                    effect.SetNearPlane(MyRenderCamera.NEAR_PLANE_DISTANCE);
+                                    effect.SetFarPlane(MyRenderCamera.FAR_PLANE_DISTANCE);
+                                }
                             }
                         }
 
@@ -885,8 +892,9 @@ namespace VRageRender
                         MyRenderMeshMaterial material = GetMeshMaterial(rMessage.RenderObjectID, rMessage.MaterialName);
                         if (material != null)
                         {
-                            material.DiffuseTexture = MyTextureManager.GetTexture<MyTexture2D>(rMessage.TextureName, "", null, LoadingMode.Immediate);
+                            material.DiffuseTexture = MyTextureManager.GetTexture<MyTexture2D>(rMessage.Changes[0].TextureName, "", null, LoadingMode.Immediate);
                         }
+                        rMessage.Changes.Clear();
 
                         break;
                     }
@@ -1582,15 +1590,13 @@ namespace VRageRender
 
                 case MyRenderMessageEnum.SwitchRenderSettings:
                     {
+                        // Dx9 Only understands interpolation and render quality.
                         var rMessage = (MyRenderMessageSwitchRenderSettings)message;
-                        MyRenderProxy.Settings.EnableObjectInterpolation = rMessage.EnableInterpolation;
-                        MyRenderProxy.Settings.EnableCameraInterpolation = rMessage.EnableInterpolation;
-                        MyRenderProxy.RenderThread.SwitchQuality(rMessage.Quality);
+                        MyRenderProxy.Settings.EnableObjectInterpolation = rMessage.Settings.InterpolationEnabled;
+                        MyRenderProxy.Settings.EnableCameraInterpolation = rMessage.Settings.InterpolationEnabled;
+                        MyRenderProxy.RenderThread.SwitchQuality(rMessage.Settings.Dx9Quality);
                         break;
                     }
-
-                case MyRenderMessageEnum.SwitchRenderSettings1:
-                    break; // Dx9 currently doesn't support new message
 
                 case MyRenderMessageEnum.UnloadData:
                     {

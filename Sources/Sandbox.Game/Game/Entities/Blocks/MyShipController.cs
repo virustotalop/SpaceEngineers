@@ -20,20 +20,25 @@ using Sandbox.ModAPI.Interfaces;
 using System.Diagnostics;
 using System.Text;
 using VRage;
+using VRage.Game.Entity.UseObject;
 using VRage.Input;
 using VRage.Library.Utils;
+using VRage.Utils;
 using VRageMath;
 using IMyModdingControllableEntity = Sandbox.ModAPI.Interfaces.IMyControllableEntity;
+using VRage.ObjectBuilders;
+using VRage.ModAPI;
 #endregion
 
 namespace Sandbox.Game.Entities
 {
-    enum ControllerPriority
+    public enum ControllerPriority
     {
-        Primary = 1,
-        Secondary = 2
+        AutoPilot = 1,
+        Primary = 2,
+        Secondary = 3
     };
-    partial class MyShipController : MyTerminalBlock, IMyControllableEntity, IMyRechargeSocketOwner, IMyShipController
+    public partial class MyShipController : MyTerminalBlock, IMyControllableEntity, IMyRechargeSocketOwner, IMyShipController
     {
         #region Fields
         public MyGridGyroSystem GridGyroSystem;
@@ -58,6 +63,7 @@ namespace Sandbox.Game.Entities
         MyHudNotification m_notificationReactorsOn;
         MyHudNotification m_notificationLeave;
         MyHudNotification m_notificationTerminal;
+        MyHudNotification m_inertiaDampenersNotification;
 
         MyHudNotification m_noWeaponNotification;
         MyHudNotification m_weaponSelectedNotification;
@@ -65,6 +71,8 @@ namespace Sandbox.Game.Entities
         MyHudNotification m_weaponNotWorkingNotification;
 
         MyHudNotification m_noControlNotification;
+
+        protected virtual MyStringId LeaveNotificationHintText { get { return MySpaceTexts.NotificationHintLeaveCockpit; } }
 
         protected bool m_enableFirstPerson = false;
         protected bool m_enableShipControl = true;
@@ -446,7 +454,8 @@ namespace Sandbox.Game.Entities
 
             if (ControllerInfo.Controller != null && MySession.LocalHumanPlayer != null && ControllerInfo.Controller == MySession.LocalHumanPlayer.Controller)
             {
-                if (CubeGrid.GridSystems.ControlSystem.GetController() == ControllerInfo.Controller)
+                var shipController = CubeGrid.GridSystems.ControlSystem.GetController();
+                if (shipController == ControllerInfo.Controller)
                 {
                     if (m_noControlNotification != null)
                     {
@@ -458,13 +467,20 @@ namespace Sandbox.Game.Entities
                 {
                     if (m_noControlNotification == null && EnableShipControl)
                     {
-                        if (CubeGrid.IsStatic)
+                        if (shipController == null && CubeGrid.GridSystems.ControlSystem.GetShipController() != null)
                         {
-                            m_noControlNotification = new MyHudNotification(MySpaceTexts.Notification_NoControlStation, 0);
+                            m_noControlNotification = new MyHudNotification(MySpaceTexts.Notification_NoControlAutoPilot, 0);
                         }
                         else
                         {
-                            m_noControlNotification = new MyHudNotification(MySpaceTexts.Notification_NoControl, 0);
+                            if (CubeGrid.IsStatic)
+                            {
+                                m_noControlNotification = new MyHudNotification(MySpaceTexts.Notification_NoControlStation, 0);
+                            }
+                            else
+                            {
+                                m_noControlNotification = new MyHudNotification(MySpaceTexts.Notification_NoControl, 0);
+                            }
                         }
                         MyHud.Notifications.Add(m_noControlNotification);
                     }
@@ -535,6 +551,7 @@ namespace Sandbox.Game.Entities
                 MyHud.ShipInfo.FuelRemainingTime = GridPowerDistributor.RemainingFuelTime;
                 MyHud.ShipInfo.Reactors = GridPowerDistributor.MaxAvailablePower;
                 MyHud.ShipInfo.PowerState = GridPowerDistributor.PowerState;
+				MyHud.ShipInfo.AllEnabledRecently = GridPowerDistributor.AllEnabledRecently;
             }
             if (GridGyroSystem != null)
                 MyHud.ShipInfo.GyroCount = GridGyroSystem.GyroCount;
@@ -743,7 +760,7 @@ namespace Sandbox.Game.Entities
             if (m_notificationLeave == null)
             {
                 var controlName = MyInput.Static.GetGameControl(MyControlsSpace.USE).GetControlButtonName(MyGuiInputDeviceEnum.Keyboard);
-                m_notificationLeave = new MyHudNotification(MySpaceTexts.NotificationHintLeaveCockpit, 0);
+                m_notificationLeave = new MyHudNotification(LeaveNotificationHintText, 0);
                 if (!MyInput.Static.IsJoystickConnected())
                     m_notificationLeave.SetTextFormatArguments(controlName);
                 else
@@ -950,6 +967,7 @@ namespace Sandbox.Game.Entities
                 MyHud.Crosshair.Hide();
                 MyHud.LargeTurretTargets.Visible = false;
                 MyHud.Notifications.Remove(m_noControlNotification);
+                m_noControlNotification = null;
             }
             else
             {
@@ -966,7 +984,7 @@ namespace Sandbox.Game.Entities
                 EndShootAll();
             }
 
-            if (m_enableShipControl)
+            if (m_enableShipControl && (IsMainCockpit == true || CubeGrid.HasMainCockpit() == false))
             {
                 if (GridSelectionSystem != null)
                 {
@@ -989,8 +1007,6 @@ namespace Sandbox.Game.Entities
                     group.GroupData.ControlSystem.RemoveControllerBlock(this);
                 }
             }
-            // to turn on/off sound in dependence of distance from listener
-            NeedsUpdate = MyEntityUpdateEnum.EACH_100TH_FRAME;
         }
 
         //Will be called when someone kicks player out of controller
@@ -1120,10 +1136,10 @@ namespace Sandbox.Game.Entities
 
             if (ControllerInfo.IsLocallyHumanControlled())
             {
-                if (GridThrustSystem.DampenersEnabled)
-                    MyHud.Notifications.Add(new MyHudNotification(MySpaceTexts.NotificationInertiaDampenersOn));
-                else
-                    MyHud.Notifications.Add(new MyHudNotification(MySpaceTexts.NotificationInertiaDampenersOff));
+                if (m_inertiaDampenersNotification == null)
+                    m_inertiaDampenersNotification = new MyHudNotification();
+                m_inertiaDampenersNotification.Text = (GridThrustSystem.DampenersEnabled ? MySpaceTexts.NotificationInertiaDampenersOn : MySpaceTexts.NotificationInertiaDampenersOff);
+                MyHud.Notifications.Add(m_inertiaDampenersNotification);
             }
         }
 
@@ -1299,13 +1315,21 @@ namespace Sandbox.Game.Entities
             }
         }
 
-        public void SwitchToWeapon(MyDefinitionId? weapon)
+        public void SwitchToWeapon(MyDefinitionId weapon)
         {
             if (m_enableShipControl)
             {
                 SwitchToWeaponInternal(weapon, true);
             }
         }
+
+		public void SwitchToWeapon(MyToolbarItemWeapon weapon)
+		{
+			if (m_enableShipControl)
+			{
+				SwitchToWeaponInternal((weapon != null ? weapon.Definition.Id : (MyDefinitionId?)null), true);
+			}
+		}
 
         public void RequestUse(UseActionEnum actionEnum, MyCharacter user)
         {
@@ -1478,6 +1502,8 @@ namespace Sandbox.Game.Entities
         {
             if (Render.NearFlag)
             {
+				Render.ColorMaskHsv = SlimBlock.ColorMaskHSV;
+
                 //TODO: Find out how to correctly change Near model
                 return;
             }
@@ -1529,6 +1555,8 @@ namespace Sandbox.Game.Entities
                     MyHud.Notifications.Add(MyNotificationSingletons.AccessDenied);
                 else if (actionResult == UseActionResult.Unpowered)
                     MyHud.Notifications.Add(new MyHudNotification(MySpaceTexts.BlockIsNotPowered, 2500, MyFontEnum.Red));
+                else if (actionResult == UseActionResult.CockpitDamaged)
+                    MyHud.Notifications.Add(new MyHudNotification(MySpaceTexts.Notification_CockpitIsDamaged, 2500, MyFontEnum.Red));
             }
         }
 
@@ -1686,7 +1714,10 @@ namespace Sandbox.Game.Entities
                 if (m_singleWeaponMode != value)
                 {
                     m_singleWeaponMode = value;
-                    SwitchToWeapon(m_selectedGunId);
+					if (m_selectedGunId.HasValue)
+						SwitchToWeapon(m_selectedGunId.Value);
+					else
+						SwitchToWeapon(null);
                 }
             }
         }

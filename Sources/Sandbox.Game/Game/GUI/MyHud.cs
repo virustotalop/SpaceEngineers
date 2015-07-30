@@ -18,6 +18,7 @@ namespace Sandbox.Game.Gui
         public static MyHudNotifications Notifications = new MyHudNotifications();
         public static MyHudShipInfo ShipInfo = new MyHudShipInfo();
         public static MyHudCharacterInfo CharacterInfo = new MyHudCharacterInfo();
+        public static MyHudScenarioInfo ScenarioInfo = new MyHudScenarioInfo();
         public static MyHudBlockInfo BlockInfo = new MyHudBlockInfo();
         public static MyHudGravityIndicator GravityIndicator = new MyHudGravityIndicator();
         public static MyHudConsumerGroupInfo ConsumerGroupInfo = new MyHudConsumerGroupInfo();
@@ -33,6 +34,7 @@ namespace Sandbox.Game.Gui
         public static MyHudCameraInfo CameraInfo = new MyHudCameraInfo();
         public static MyHudObjectiveLine ObjectiveLine = new MyHudObjectiveLine();
         public static MyHudNetgraph Netgraph = new MyHudNetgraph();
+        public static MyHudVoiceChat VoiceChat = new MyHudVoiceChat();
 
         private static int m_rotatingWheelVisibleCounter;
         public static bool RotatingWheelVisible
@@ -80,6 +82,7 @@ namespace Sandbox.Game.Gui
             ShipInfo.Reload();
             CharacterInfo.Reload();
             ConsumerGroupInfo.Reload();
+            ScenarioInfo.Reload();
         }
 
         public static void PushRotatingWheelVisible()
@@ -108,6 +111,7 @@ namespace Sandbox.Game.Gui
             LocationMarkers.Clear();
             GpsMarkers.Clear();
             HackingMarkers.Clear();
+            ObjectiveLine.Clear();
             if (MyFakes.ENABLE_NETGRAPH)
             {
                 Netgraph.ClearNetgraph();

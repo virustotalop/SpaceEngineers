@@ -53,6 +53,12 @@ namespace Sandbox.Game.AI
             get { return false; }
         }
 
+        public bool CreatedByPlayer
+        {
+            get;
+            set;
+        }
+
         // TODO: Remove this terrible hack :-)
         public bool ShouldFollowPlayer { get { return false; } set { return; } }
 
@@ -91,8 +97,9 @@ namespace Sandbox.Game.AI
             m_actionCollection = actionCollection;
         }
 
-        public void Spawn(Vector3D? spawnPosition)
+        public void Spawn(Vector3D? spawnPosition, bool spawnedByPlayer)
         {
+            CreatedByPlayer = spawnedByPlayer;
             var character = m_player.Controller.ControlledEntity as MyCharacter;
             if (character != null && character.IsDead || m_player.Identity.IsDead)
             {
@@ -187,7 +194,7 @@ namespace Sandbox.Game.AI
         internal MyBehaviorTreeState Action_Idle()
         {
             m_navigation.StopImmediate();
-            m_player.Character.PlayCharacterAnimation("Idle", true, MyPlayAnimationMode.WaitForPreviousEnd, 0.5f);
+            m_player.Character.PlayCharacterAnimation("Idle", MyBlendOption.WaitForPreviousEnd, MyFrameOption.Loop, 0.5f);
             return MyBehaviorTreeState.RUNNING;
         }
 
@@ -204,12 +211,10 @@ namespace Sandbox.Game.AI
             set { throw new NotImplementedException(); }
         }
 
-
         public void InitLogic(MyBotLogic logic)
         {
             throw new NotImplementedException();
         }
-
 
         public MyBotLogic BotLogic
         {

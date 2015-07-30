@@ -269,6 +269,7 @@
     <Entry Class="LargeBlocks" BlueprintSubtypeId="UpgradeModule/LargeProductivityModule" />
     <Entry Class="LargeBlocks" BlueprintSubtypeId="UpgradeModule/LargeEffectivenessModule" />
     <Entry Class="LargeBlocks" BlueprintSubtypeId="UpgradeModule/LargeEnergyModule" />
+    <Entry Class="LargeBlocks" BlueprintSubtypeId="JumpDrive/LargeJumpDrive" />
     <Entry Class="LargeBlocks" BlueprintSubtypeId="AirVent/(null)" />
     <Entry Class="LargeBlocks" BlueprintSubtypeId="Passage/(null)" />
     <Entry Class="LargeBlocks" BlueprintSubtypeId="AirtightHangarDoor/(null)" />
@@ -466,6 +467,7 @@
     <Entry Class="Ingots" BlueprintSubtypeId="StoneOreToIngot" />
     <Entry Class="Ingots" BlueprintSubtypeId="IronOreToIngot" />
     <Entry Class="Ingots" BlueprintSubtypeId="ScrapToIronIngot" />
+    <Entry Class="Ingots" BlueprintSubtypeId="ScrapIngotToIronIngot" />
     <Entry Class="Ingots" BlueprintSubtypeId="NickelOreToIngot" />
     <Entry Class="Ingots" BlueprintSubtypeId="CobaltOreToIngot" />
     <Entry Class="Ingots" BlueprintSubtypeId="MagnesiumOreToIngot" />
@@ -479,6 +481,7 @@
     <Entry Class="CommonMetals" BlueprintSubtypeId="NickelOreToIngot" />
     <Entry Class="CommonMetals" BlueprintSubtypeId="CobaltOreToIngot" />
     <Entry Class="CommonMetals" BlueprintSubtypeId="ScrapToIronIngot" />
+    <Entry Class="CommonMetals" BlueprintSubtypeId="ScrapIngotToIronIngot" />
     
     <Entry Class="PreciousMetals" BlueprintSubtypeId="PlatinumOreToIngot" />
     <Entry Class="PreciousMetals" BlueprintSubtypeId="SilverOreToIngot" />

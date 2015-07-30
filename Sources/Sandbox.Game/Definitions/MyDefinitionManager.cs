@@ -36,6 +36,8 @@ using VRage.Library.Utils;
 using Sandbox.Common.ObjectBuilders.AI;
 using Sandbox.Game.AI.Pathfinding;
 using VRage.FileSystem;
+using VRage.ObjectBuilders;
+using VRage.Game.ObjectBuilders;
 
 #endregion
 
@@ -55,6 +57,8 @@ namespace Sandbox.Definitions
         private const string DUPLICATE_ENTRY_MESSAGE = "Duplicate entry of '{0}'";
         private const string UNKNOWN_ENTRY_MESSAGE = "Unknown type '{0}'";
         private const string WARNING_ON_REDEFINITION_MESSAGE = "WARNING: Unexpected behaviour may occur due to redefinition of '{0}'";
+
+
         #endregion
 
         #region Constructor
@@ -175,6 +179,19 @@ namespace Sandbox.Definitions
                     var delta = (Stopwatch.GetTimestamp() - s) / (double)Stopwatch.Frequency;
                     Debug.WriteLine(String.Format("Models tested in: {0} seconds", delta));
                 }
+
+                var classes = MyDefinitionManager.Static.GetEnvironmentItemClassDefinitions();
+                foreach (var cl in classes)
+                {
+                    List<MyDefinitionId> classList = null;
+                    if (!m_definitions.m_channelEnvironmentItemsDefs.TryGetValue(cl.Channel, out classList))
+                    {
+                        classList = new List<MyDefinitionId>();
+                        m_definitions.m_channelEnvironmentItemsDefs[cl.Channel] = classList;
+                    }
+
+                    classList.Add(cl.Id);
+                }
             }
             MySandboxGame.Log.WriteLine("MyDefinitionManager.LoadData() - END");
         }
@@ -217,7 +234,16 @@ namespace Sandbox.Definitions
                 context.CurrentFile = file;
 
                 MyDataIntegrityChecker.HashInFile(file);
-                MyObjectBuilder_Definitions builder = CheckPrefabs(file);
+                MyObjectBuilder_Definitions builder = null;
+                try
+                {
+                    builder = CheckPrefabs(file);
+                }
+                catch (Exception e)
+                {
+                    FailModLoading(context, innerException: e);
+                    return;
+                }
 
                 if (builder == null)
                 {
@@ -226,17 +252,8 @@ namespace Sandbox.Definitions
 
                 if (builder == null)
                 {
-                    MyDefinitionErrors.Add(context, "MOD SKIPPED, Cannot load definition file, see log for details", ErrorSeverity.Critical);
-                    if (context.IsBaseGame)
-                    {
-                        // When original definition fails to load, return to main menu
-                        throw new MyLoadingException(String.Format(MyTexts.GetString(MySpaceTexts.LoadingError_ModifiedOriginalContent), file));
-                    }
-                    else
-                    {
-                        // When definition from MOD fails to load, skip mod loading
-                        return;
-                    }
+                    FailModLoading(context);
+                    return;
                 }
                 definitionsBuilders.Add(new Tuple<MyObjectBuilder_Definitions, string>(builder, file));
             }
@@ -252,20 +269,39 @@ namespace Sandbox.Definitions
 
             for (int i = 0; i < phases.Length; i++)
             {
-                /*try
-                {*/
+                try
+                {
                     foreach (var builder in definitionsBuilders)
                     {
                         context.CurrentFile = builder.Item2;
                         phases[i](builder.Item1, context, definitionSet, failOnDebug);
                     }
-                /*}
-                catch
+                }
+                catch (Exception e)
                 {
-                    MyDefinitionErrors.Add(context, String.Format("MOD PARTIALLY SKIPPED, LOADED ONLY {0}/{1} PHASES, see logfile for details", i + 1, phases.Length), ErrorSeverity.Critical);
+                    FailModLoading(context, phase: i, phaseNum: phases.Length, innerException: e);
                     return;
-                }*/
+                }
                 MergeDefinitions();
+            }
+        }
+
+        private static void FailModLoading(MyModContext context, int phase = -1, int phaseNum = 0, Exception innerException = null)
+        {
+            if (phase == -1)
+                MyDefinitionErrors.Add(context, "MOD SKIPPED, Cannot load definition file, see log for details", ErrorSeverity.Critical);
+            else
+                MyDefinitionErrors.Add(context, String.Format("MOD PARTIALLY SKIPPED, LOADED ONLY {0}/{1} PHASES, see logfile for details", phase + 1, phaseNum), ErrorSeverity.Critical);
+
+            if (context.IsBaseGame)
+            {
+                // When original definition fails to load, return to main menu
+                throw new MyLoadingException(String.Format(MyTexts.GetString(MySpaceTexts.LoadingError_ModifiedOriginalContent), context.CurrentFile), innerException);
+            }
+            else
+            {
+                // When definition from MOD fails to load, skip mod loading
+                return;
             }
         }
 
@@ -540,6 +576,13 @@ namespace Sandbox.Definitions
                 InitBotCommands(context, definitionSet.m_definitionsById, objBuilder.AiCommands, failOnDebug);
             }
 
+            if (objBuilder.AreaMarkerDefinitions != null)
+            {
+                MySandboxGame.Log.WriteLine("Loading area definitions");
+                InitDefinitionsGeneric<MyObjectBuilder_AreaMarkerDefinition, MyAreaMarkerDefinition>
+                    (context, definitionSet.m_definitionsById, objBuilder.AreaMarkerDefinitions, failOnDebug);
+            }
+
             if (objBuilder.BlockNavigationDefinitions != null)
             {
                 MySandboxGame.Log.WriteLine("Loading navigation definitions");
@@ -554,14 +597,82 @@ namespace Sandbox.Definitions
 
             if (objBuilder.ControllerSchemas != null)
             {
-                MySandboxGame.Log.WriteLine("Loading cutting definitions");
+                MySandboxGame.Log.WriteLine("Loading controller schemas definitions");
                 InitControllerSchemas(context, definitionSet.m_definitionsById, objBuilder.ControllerSchemas, failOnDebug);
             }
 
-            if(objBuilder.CurveDefinitions != null)
+            if (objBuilder.CurveDefinitions != null)
             {
                 MySandboxGame.Log.WriteLine("Loading curve definitions");
                 InitCurves(context, definitionSet.m_definitionsById, objBuilder.CurveDefinitions, failOnDebug);
+            }
+
+            if (objBuilder.CharacterNames != null)
+            {
+                MySandboxGame.Log.WriteLine("Loading character names");
+                InitCharacterNames(context, definitionSet.m_characterNames, objBuilder.CharacterNames, failOnDebug);
+            }
+
+            if (objBuilder.Battle != null)
+            {
+                MySandboxGame.Log.WriteLine("Loading battle definition");
+                Check(failOnDebug, "Battle", failOnDebug, WARNING_ON_REDEFINITION_MESSAGE);
+                InitBattle(context, ref definitionSet.m_battleDefinition, objBuilder.Battle, failOnDebug);
+            }
+
+            if (objBuilder.Decals != null)
+            {
+                MySandboxGame.Log.WriteLine("Loading decal definitions");
+                Check(failOnDebug, "Decals", failOnDebug, WARNING_ON_REDEFINITION_MESSAGE);
+                InitDecals(context, objBuilder.Decals, failOnDebug);
+            }
+
+            if (objBuilder.PlanetGeneratorDefinitions != null)
+            {
+                MySandboxGame.Log.WriteLine("Loading battle definition");
+                Check(failOnDebug, "Battle", failOnDebug, WARNING_ON_REDEFINITION_MESSAGE);
+                InitPlanetGeneratorDefinitions(context, ref definitionSet.m_moonGeneratorDefinitions,ref definitionSet.m_planetGeneratorDefinitions, objBuilder.PlanetGeneratorDefinitions, failOnDebug);
+            }
+
+            if (objBuilder.FloraElements != null)
+            {
+                MySandboxGame.Log.WriteLine("Loading flora elements definitions");
+                Check(failOnDebug, "Flora", failOnDebug, WARNING_ON_REDEFINITION_MESSAGE);
+                InitGenericObjects(context, definitionSet.m_definitionsById, objBuilder.FloraElements, failOnDebug);
+            }
+
+			if (objBuilder.StatGroupDefinitions != null)
+			{
+				MySandboxGame.Log.WriteLine("Loading stat group definitions");
+				Check(failOnDebug, "StatGroupDefinition", failOnDebug, WARNING_ON_REDEFINITION_MESSAGE);
+				InitGenericObjects(context, definitionSet.m_definitionsById, objBuilder.StatGroupDefinitions, failOnDebug);
+			}
+
+			if (objBuilder.StatDefinitions != null)
+			{
+				MySandboxGame.Log.WriteLine("Loading stat definitions");
+				Check(failOnDebug, "Stat", failOnDebug, WARNING_ON_REDEFINITION_MESSAGE);
+				InitGenericObjects(context, definitionSet.m_definitionsById, objBuilder.StatDefinitions, failOnDebug);
+			}
+
+            if (objBuilder.ComponentGroups != null)
+            {
+                MySandboxGame.Log.WriteLine("Loading component group definitions");
+                Check(failOnDebug, "Component groups", failOnDebug, WARNING_ON_REDEFINITION_MESSAGE);
+                InitComponentGroups(context, definitionSet.m_componentGroups, objBuilder.ComponentGroups, failOnDebug);
+            }
+
+            if (objBuilder.ComponentBlocks != null)
+            {
+                MySandboxGame.Log.WriteLine("Loading component block definitions");
+                InitComponentBlocks(context, definitionSet.m_componentBlockEntries, objBuilder.ComponentBlocks, failOnDebug);
+            }
+
+            if (objBuilder.PlanetPrefabs != null)
+            {
+                MySandboxGame.Log.WriteLine("Loading flora elements definitions");
+                Check(failOnDebug, "Flora", failOnDebug, WARNING_ON_REDEFINITION_MESSAGE);
+                InitPlanetPrefabDefinitions(context,ref definitionSet.m_planetPrefabDefinitions, objBuilder.PlanetPrefabs, failOnDebug);
             }
         }
 
@@ -625,6 +736,12 @@ namespace Sandbox.Definitions
                     MySandboxGame.Log.WriteLine("Loading prefabs");
                     InitPrefabs(context, definitionSet.m_prefabs, objBuilder.Prefabs, failOnDebug);
                 }
+            }
+
+            if (MyFakes.ENABLE_GENERATED_INTEGRITY_FIX)
+            {
+                foreach (var size in definitionSet.m_uniqueCubeBlocksBySize)
+                    FixGeneratedBlocksIntegrity(size);
             }
         }
 
@@ -704,6 +821,8 @@ namespace Sandbox.Definitions
             CreateTransparentMaterials();
             InitVoxelMaterials();
             InitBlockGroups();
+            PostprocessComponentGroups();
+            PostprocessComponentBlocks();
             PostprocessBlueprints();
             AddEntriesToBlueprintClasses();
             AddEntriesToEnvironmentItemClasses();
@@ -776,6 +895,51 @@ namespace Sandbox.Definitions
                     }
                 }
             }
+        }
+
+        private void PostprocessComponentGroups()
+        {
+            foreach (var entry in m_definitions.m_componentGroups)
+            {
+                MyComponentGroupDefinition group = entry.Value;
+
+                group.Postprocess();
+                if (group.IsValid)
+                {
+                    int maxAmount = group.GetComponentNumber();
+
+                    for (int i = 1; i <= maxAmount; ++i)
+                    {
+                        MyComponentDefinition component = group.GetComponentDefinition(i);
+                        m_definitions.m_componentGroupMembers.Add(component.Id, new MyTuple<int, MyComponentGroupDefinition>(i, group));
+                    }
+                }
+            }
+        }
+
+        private void PostprocessComponentBlocks()
+        {
+            foreach (var entry in m_definitions.m_componentBlockEntries)
+            {
+                if (!entry.Enabled) continue;
+
+                var type = MyObjectBuilderType.Parse(entry.Type);
+                MyDefinitionId blockDefinitionId = new MyDefinitionId(type, entry.Subtype);
+                m_definitions.m_componentBlocks.Add(blockDefinitionId);
+
+                if (entry.Main)
+                {
+                    MyCubeBlockDefinition blockDef = null;
+                    TryGetCubeBlockDefinition(blockDefinitionId, out blockDef);
+                    
+                    if (blockDef.Components.Length == 1 && blockDef.Components[0].Count == 1)
+                    {
+                        m_definitions.m_componentIdToBlock[blockDef.Components[0].Definition.Id] = blockDef;
+                    }
+                }
+            }
+
+            m_definitions.m_componentBlockEntries.Clear();
         }
 
         private void PostprocessBlueprints()
@@ -897,7 +1061,7 @@ namespace Sandbox.Definitions
                 // We don't want to have to hide both the item's definition and it's class entry
                 if (itemDefinition == null) continue;
 
-                MyStringId subtypeId = MyStringId.GetOrCompute(entry.ItemSubtype);
+                var subtypeId = MyStringHash.GetOrCompute(entry.ItemSubtype);
                 itemsDefinition.AddItemDefinition(subtypeId);
             }
             m_definitions.m_environmentItemsEntries.Clear();
@@ -959,12 +1123,13 @@ namespace Sandbox.Definitions
 
             m_modDefinitionSets.Clear();
             m_definitions.Clear();
+            m_definitions.m_channelEnvironmentItemsDefs.Clear();
         }
 
         private T Load<T>(string path) where T : MyObjectBuilder_Base
         {
             T result = null;
-            Sandbox.Common.ObjectBuilders.Serializer.MyObjectBuilderSerializer.DeserializeXML(path, out result);
+            MyObjectBuilderSerializer.DeserializeXML(path, out result);
             return result;
         }
 
@@ -972,7 +1137,7 @@ namespace Sandbox.Definitions
         {
             string filePath = Path.Combine(dataPath, fileName);
             var path = Path.Combine(MyFileSystem.ContentPath, filePath);
-            Sandbox.Common.ObjectBuilders.Serializer.MyObjectBuilderSerializer.SerializeXML(path, false, builder);
+            MyObjectBuilderSerializer.SerializeXML(path, false, builder);
         }
 
         private static void InitAmmoMagazines(MyModContext context,
@@ -1217,7 +1382,24 @@ namespace Sandbox.Definitions
                 output[res[i].Id] = res[i];
             }
         }
+        private void FixGeneratedBlocksIntegrity(DefinitionDictionary<MyCubeBlockDefinition> cubeBlocks)
+        {
+            foreach(var entry in cubeBlocks)
+            {
+                var block = entry.Value;
+                if (block.GeneratedBlockDefinitions == null) continue;
 
+                foreach(var gen in block.GeneratedBlockDefinitions)
+                {
+                    MyCubeBlockDefinition generatedBlock;
+                    if (!TryGetCubeBlockDefinition(gen, out generatedBlock)) continue;
+                    if (generatedBlock.GeneratedBlockType == MyStringId.GetOrCompute("pillar"))
+                        continue;
+                    generatedBlock.Components = block.Components;
+                    generatedBlock.MaxIntegrity = block.MaxIntegrity;
+                }
+            }
+        }
 
         private static void PrepareBlockBlueprints(MyModContext context,
             Dictionary<MyDefinitionId, MyBlueprintDefinitionBase> output, Dictionary<MyDefinitionId, MyCubeBlockDefinition> cubeBlocks, bool failOnDebug = true)
@@ -1354,6 +1536,26 @@ namespace Sandbox.Definitions
             }
         }
 
+        private static void InitBattle(MyModContext context,
+            ref MyBattleDefinition output, MyObjectBuilder_BattleDefinition objBuilder, bool failOnDebug = true)
+        {
+            var battleDef = InitDefinition<MyBattleDefinition>(context, objBuilder);
+            output = battleDef;
+        }
+
+        private static void InitDecals(MyModContext context, MyObjectBuilder_DecalDefinition[] objBuilder, bool failOnDebug = true)
+        {
+            List<string> names = new List<string>();
+            List<MyDecalMaterialDesc> desc = new List<MyDecalMaterialDesc>();
+            foreach(var m in objBuilder)
+            {
+                names.Add(m.Id.SubtypeName);
+                desc.Add(m.Material);
+            }
+
+            VRageRender.MyRenderProxy.RegisterDecals(names, desc);
+        }
+
         public void SetDefaultNavDef(MyCubeBlockDefinition blockDefinition)
         {
             var ob = MyBlockNavigationDefinition.GetDefaultObjectBuilder(blockDefinition);
@@ -1426,7 +1628,7 @@ namespace Sandbox.Definitions
 
         public void SaveHandItems()
         {
-            var objBuilder = Sandbox.Common.ObjectBuilders.Serializer.MyObjectBuilderSerializer.CreateNewObject<MyObjectBuilder_Definitions>();
+            var objBuilder = MyObjectBuilderSerializer.CreateNewObject<MyObjectBuilder_Definitions>();
             List<MyObjectBuilder_HandItemDefinition> defList = new List<MyObjectBuilder_HandItemDefinition>();
 
             foreach (var handDef in m_definitions.m_handItemsById.Values)
@@ -1538,6 +1740,14 @@ namespace Sandbox.Definitions
                 var id = curveDefinition.Id;
                 Check(!outputDefinitions.ContainsKey(id), id, failOnDebug);
                 outputDefinitions.AddDefinitionSafe(curveDefinition, context, "<Curve>");
+            }
+        }
+
+        private void InitCharacterNames(MyModContext context, List<MyCharacterName> output, MyCharacterName[] names, bool failOnDebug)
+        {
+            foreach (var nameEntry in names)
+            {
+                output.Add(nameEntry);
             }
         }
 
@@ -1660,12 +1870,132 @@ namespace Sandbox.Definitions
             }
         }
 
+        private void InitPlanetGeneratorDefinitions(MyModContext context,ref DefinitionDictionary<MyPlanetGeneratorDefinition> m_moonDefinitions,  ref DefinitionDictionary<MyPlanetGeneratorDefinition> m_planetDefinitions, MyObjectBuilder_PlanetGeneratorDefinition[] planets, bool failOnDebug)
+        {
+            foreach (var planet in planets)
+            {
+                var planetDefinition = InitDefinition<MyPlanetGeneratorDefinition>(context, planet);
+                var id = planetDefinition.Id;
+                if (planetDefinition.Enabled)
+                {
+                    if (planetDefinition.IsMoonDefinition)
+                    {
+                        m_moonDefinitions[id] = planetDefinition;
+                    }
+                    else
+                    {
+                        m_planetDefinitions[id] = planetDefinition;
+                    }
+                }
+                else
+                {
+                    if (planetDefinition.IsMoonDefinition)
+                    {
+                        m_moonDefinitions.Remove(id);
+                    }
+                    else
+                    {
+                        m_planetDefinitions.Remove(id);
+                    }
+                }
+     
+            }
+        }
+
+        private static void InitComponentGroups(MyModContext context, DefinitionDictionary<MyComponentGroupDefinition> output, MyObjectBuilder_ComponentGroupDefinition[] objects, bool failOnDebug = true)
+        {
+            for (int i = 0; i < objects.Length; i++)
+            {
+                var definition = InitDefinition<MyComponentGroupDefinition>(context, objects[i]);
+
+                Check(!output.ContainsKey(definition.Id), definition.Id, failOnDebug);
+                output[definition.Id] = definition;
+            }
+        }
+
+        private void InitComponentBlocks(MyModContext context, HashSet<MyComponentBlockEntry> output, MyComponentBlockEntry[] objects, bool failOnDebug = true)
+        {
+            for (int i = 0; i < objects.Length; i++)
+            {
+                var entry = objects[i];
+                Check(!output.Contains(entry), entry, failOnDebug);
+                output.Add(entry);
+            }
+        }
+
+        private void InitPlanetPrefabDefinitions(MyModContext context, ref DefinitionDictionary<MyPlanetPrefabDefinition> m_planetDefinitions, MyObjectBuilder_PlanetPrefabDefinition[] planets, bool failOnDebug)
+        {
+            foreach (var planet in planets)
+            {
+                var planetDefinition = InitDefinition<MyPlanetPrefabDefinition>(context, planet);
+                var id = planetDefinition.Id;
+                if (planetDefinition.Enabled)
+                {
+                    m_planetDefinitions[id] = planetDefinition;
+                }
+                else
+                {
+                    m_planetDefinitions.Remove(id);
+                }
+
+            }
+        }
+
+        public bool IsComponentBlock(MyDefinitionId blockDefinitionId)
+        {
+            return m_definitions.m_componentBlocks.Contains(blockDefinitionId);
+        }
+
+        public MyDefinitionId GetComponentId(MyCubeBlockDefinition blockDefinition)
+        {
+            var components = blockDefinition.Components;
+
+            if (components == null || components.Length == 0)
+                return new MyDefinitionId();
+
+            return components[0].Definition.Id;
+        }
+
+        public MyDefinitionId GetComponentId(MyDefinitionId blockId)
+        {
+            MyCubeBlockDefinition blockDefinition = null;
+            if (!TryGetCubeBlockDefinition(blockId, out blockDefinition))
+                return new MyDefinitionId();
+
+            return GetComponentId(blockDefinition);
+        }
+
+        public MyCubeBlockDefinition TryGetComponentBlockDefinition(MyDefinitionId componentDefId)
+        {
+            MyCubeBlockDefinition retval = null;
+            m_definitions.m_componentIdToBlock.TryGetValue(componentDefId, out retval);
+            return retval;
+        }
+
+        public MyCubeBlockDefinition GetComponentBlockDefinition(MyDefinitionId componentDefId)
+        {
+            MyCubeBlockDefinition retval = null;
+            m_definitions.m_componentIdToBlock.TryGetValue(componentDefId, out retval);
+
+            Debug.Assert(retval != null, "Could not find a block that contains component " + componentDefId + "!");
+
+            return retval;
+        }
+
         public DictionaryValuesReader<string, MyCharacterDefinition> Characters
         {
             get { return new DictionaryValuesReader<string, MyCharacterDefinition>(m_definitions.m_characters); }
         }
 
-        public MyAudioDefinition GetSoundDefinition(MyStringId subtypeId)
+        public string GetRandomCharacterName()
+        {
+            if (m_definitions.m_characterNames.Count == 0) return "";
+
+            int index = MyUtils.GetRandomInt(m_definitions.m_characterNames.Count);
+            return m_definitions.m_characterNames[index].Name;
+        }
+
+        public MyAudioDefinition GetSoundDefinition(MyStringHash subtypeId)
         {
             return m_definitions.m_sounds[new MyDefinitionId(typeof(MyObjectBuilder_AudioDefinition), subtypeId)];
         }
@@ -1696,7 +2026,7 @@ namespace Sandbox.Definitions
         {
             Type blockType = MyCubeBlockFactory.GetProducedType(cubeBlockDefinition.Id.TypeId);
 
-            MyObjectBuilder_CompositeBlueprintDefinition ob = Sandbox.Common.ObjectBuilders.Serializer.MyObjectBuilderSerializer.CreateNewObject<MyObjectBuilder_CompositeBlueprintDefinition>();
+            MyObjectBuilder_CompositeBlueprintDefinition ob = MyObjectBuilderSerializer.CreateNewObject<MyObjectBuilder_CompositeBlueprintDefinition>();
 
             ob.Id = new SerializableDefinitionId(typeof(MyObjectBuilder_BlueprintDefinition), cubeBlockDefinition.Id.ToString().Replace("MyObjectBuilder_", "")); /*blockType.Name.Substring(2) + "/" + cubeBlockDefinition.Id.SubtypeName*/
             
@@ -2118,6 +2448,13 @@ namespace Sandbox.Definitions
         {
             MyRespawnShipDefinition def;
             m_definitions.m_respawnShips.TryGetValue(id, out def);
+
+            if (def == null) return null;
+
+            var prefabDef = def.Prefab;
+            Debug.Assert(prefabDef != null, "Prefab definition in respawn ship definition is null!");
+            if (prefabDef == null) return null;
+
             return def;
         }
 
@@ -2138,7 +2475,7 @@ namespace Sandbox.Definitions
                     MyPrefabDefinition definition = GetPrefabDefinition(prefab.Id.SubtypeId);
                     if (definition != null)
                     {
-                        definition.Init(prefab,definition.Context);
+                        definition.InitLazy(prefab);
                     }
                 }
             }
@@ -2335,6 +2672,33 @@ namespace Sandbox.Definitions
             CheckDefinition<MyDefinitionBase>(ref id);
         }
 
+        public MyEnvironmentItemsDefinition GetRandomEnvironmentClass(int channel)
+        {
+            MyEnvironmentItemsDefinition classDef = null;
+
+            List<MyDefinitionId> definitionList = null;
+            m_definitions.m_channelEnvironmentItemsDefs.TryGetValue(channel, out definitionList);
+            Debug.Assert(definitionList != null, "No environment items definitions for channel " + channel.ToString());
+            if (definitionList == null)
+            {
+                return classDef;
+            }
+
+            Debug.Assert(definitionList.Count > 0);
+            int randomIndex = MyRandom.Instance.Next(0, definitionList.Count);
+            Debug.Assert(randomIndex < definitionList.Count);
+            MyDefinitionId classId = definitionList[randomIndex];
+            MyDefinitionManager.Static.TryGetDefinition(classId, out classDef);
+            return classDef;
+        }
+
+        public ListReader<MyDefinitionId> GetEnvironmentItemsDefinitions(int channel)
+        {
+            List<MyDefinitionId> definitionList = null;
+            m_definitions.m_channelEnvironmentItemsDefs.TryGetValue(channel, out definitionList);
+            return definitionList;
+        }
+
         private void CheckDefinition<T>(ref MyDefinitionId id) where T : MyDefinitionBase
         {
             MyDefinitionBase definitionBase;
@@ -2359,6 +2723,40 @@ namespace Sandbox.Definitions
             {
                 Debug.Fail("Definition is invalid, but cannot display error message because id.ToString() fails! Exception message: {0}", ex.Message);
             }
+        }
+
+        public DictionaryValuesReader<MyDefinitionId, MyPlanetGeneratorDefinition> GetPlanetsGeneratorsDefinitions()
+        {
+            return new DictionaryValuesReader<MyDefinitionId, MyPlanetGeneratorDefinition>(m_definitions.m_planetGeneratorDefinitions);
+        }
+
+        public DictionaryValuesReader<MyDefinitionId, MyPlanetGeneratorDefinition> GetMoonsGeneratorsDefinitions()
+        {
+            return new DictionaryValuesReader<MyDefinitionId, MyPlanetGeneratorDefinition>(m_definitions.m_moonGeneratorDefinitions);
+        }
+
+        public DictionaryValuesReader<MyDefinitionId, MyPlanetPrefabDefinition> GetPlanetsPrefabsDefinitions()
+        {
+            return new DictionaryValuesReader<MyDefinitionId, MyPlanetPrefabDefinition>(m_definitions.m_planetPrefabDefinitions);
+        }
+
+        public MyComponentGroupDefinition GetComponentGroup(MyDefinitionId groupDefId)
+        {
+            MyComponentGroupDefinition group = null;
+            m_definitions.m_componentGroups.TryGetValue(groupDefId, out group);
+            return group;
+        }
+
+        public MyComponentGroupDefinition GetGroupForComponent(MyDefinitionId componentDefId, out int amount)
+        {
+            MyTuple<int, MyComponentGroupDefinition> result;
+            if (m_definitions.m_componentGroupMembers.TryGetValue(componentDefId, out result))
+            {
+                amount = result.Item1;
+                return result.Item2;
+            }
+            amount = 0;
+            return null;
         }
 
         #endregion
@@ -2412,6 +2810,11 @@ namespace Sandbox.Definitions
         public MyEnvironmentDefinition EnvironmentDefinition
         {
             get { return m_definitions.m_environmentDef; }
+        }
+
+        public MyBattleDefinition BattleDefinition
+        {
+            get { return m_definitions.m_battleDefinition; }
         }
 
         #endregion
@@ -2584,7 +2987,7 @@ namespace Sandbox.Definitions
 
             foreach (var defPair in defs)
             {
-                var objBuilder = Sandbox.Common.ObjectBuilders.Serializer.MyObjectBuilderSerializer.CreateNewObject<MyObjectBuilder_Definitions>();
+                var objBuilder = MyObjectBuilderSerializer.CreateNewObject<MyObjectBuilder_Definitions>();
                 var defList = new List<MyObjectBuilder_DefinitionBase>();
 
                 foreach (var def in defPair.Value)
@@ -2596,7 +2999,7 @@ namespace Sandbox.Definitions
                 //TODO: Add here all needed properties
                 objBuilder.CubeBlocks = defList.OfType<MyObjectBuilder_CubeBlockDefinition>().ToArray();
                     
-                Sandbox.Common.ObjectBuilders.Serializer.MyObjectBuilderSerializer.SerializeXML(defPair.Key, false, objBuilder);
+                MyObjectBuilderSerializer.SerializeXML(defPair.Key, false, objBuilder);
             }                
         }
 

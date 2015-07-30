@@ -77,10 +77,6 @@ namespace VRageRender
 
         //Geometry quality
         public bool UseNormals;
-        public bool NeedReloadContent;
-
-        // Use additional channel textures on models (dirt, rust, etc...)
-        public bool UseChannels;
 
         // Spot shadow max distance multiplier 
         public float SpotShadowsMaxDistanceMultiplier;
@@ -90,12 +86,6 @@ namespace VRageRender
 
         // Distant impostors
         public bool EnableDistantImpostors;
-
-        // Flying debris
-        public bool EnableFlyingDebris;
-
-        // Decals
-        public bool EnableDecals;
 
         //Explosion voxel debris
         public float ExplosionDebrisCountMultiplier;
@@ -179,6 +169,8 @@ namespace VRageRender
 
         static MyRenderConstants()
         {
+            var massiveClipmapLodRanges = new float[] { 66f, 200f, 550f, 900f, };
+
             m_renderQualityProfiles[(int)MyRenderQualityEnum.NORMAL] = new MyRenderQualityProfile()
             {
                 RenderQuality = MyRenderQualityEnum.NORMAL,
@@ -190,8 +182,8 @@ namespace VRageRender
                 LodTransitionDistanceBackgroundEnd = 1100,
                 LodClipmapRanges = new float[][]
                 { // base was 32f * 4f
-                    new float[] { 100f, 300f, 800f, 2000f, 6000f, 18000f, 35000f, 100000f, },
-                    new float[] { 40f, 120f, 300f, 800f, 2400f, 5000f, },
+                    new float[] { 100f, 300f, 800f, 2000f, 4500f, 13500f, 30000f, 100000f, },
+                    massiveClipmapLodRanges,
                 },
 
                 // No need to set, env maps enabled only on high and extreme
@@ -243,8 +235,6 @@ namespace VRageRender
 
                 //Geometry quality
                 UseNormals = true,
-                NeedReloadContent = true, //because normal->high and vertex channels
-                UseChannels = false,
 
                 // Spot shadow max distance multiplier 
                 SpotShadowsMaxDistanceMultiplier = 1.0f,
@@ -254,12 +244,6 @@ namespace VRageRender
 
                 // Distant impostors
                 EnableDistantImpostors = false,
-
-                // Flying debris
-                EnableFlyingDebris = false,
-
-                // Decals
-                EnableDecals = false,
 
                 //Explosion voxel debris
                 ExplosionDebrisCountMultiplier = 0.5f,
@@ -277,7 +261,7 @@ namespace VRageRender
                 LodClipmapRanges = new float[][]
                 { // base was 32f * 2f
                     new float[] { 80f, 240f, 600f, 1600f, 4800f, 14000f, 35000f, 100000f, },
-                    new float[] { 40f, 120f, 300f, 800f, 2400f, 5000f, }, 
+                    massiveClipmapLodRanges,
                 },
 
                 // No need to set, env maps enabled only on high and extreme
@@ -327,8 +311,6 @@ namespace VRageRender
 
                 //Geometry quality
                 UseNormals = false,
-                NeedReloadContent = true,
-                UseChannels = false,
 
                 // Spot shadow max distance multiplier 
                 SpotShadowsMaxDistanceMultiplier = 0.0f,
@@ -338,12 +320,6 @@ namespace VRageRender
 
                 // Distant impostors
                 EnableDistantImpostors = false,
-
-                // Flying debris
-                EnableFlyingDebris = false,
-
-                // Decals
-                EnableDecals = false,
 
                 //Explosion voxel debris
                 ExplosionDebrisCountMultiplier = 0,
@@ -360,8 +336,8 @@ namespace VRageRender
                 LodTransitionDistanceBackgroundEnd = 2000,
                 LodClipmapRanges = new float[][]
                 { // base was 32f * 6f
-                    new float[] { 120f, 360f, 900f, 2000f, 6000f, 18000f, 35000f, 100000f, },
-                    new float[] { 40f, 120f, 300f, 800f, 2400f, 5000f, }
+                    new float[] { 120f, 360f, 900f, 2000f, 4500f, 13500f, 30000f, 100000f, },
+                    massiveClipmapLodRanges,
                 },
 
                 EnvironmentLodTransitionDistance = 40,
@@ -410,8 +386,6 @@ namespace VRageRender
 
                 //Geometry quality
                 UseNormals = true,
-                NeedReloadContent = false,
-                UseChannels = true,
 
                 // Spot shadow max distance multiplier 
                 SpotShadowsMaxDistanceMultiplier = 2.5f,
@@ -421,12 +395,6 @@ namespace VRageRender
 
                 // Distant impostors
                 EnableDistantImpostors = true,
-
-                // Flying debris
-                EnableFlyingDebris = true,
-
-                // Decals
-                EnableDecals = true,
 
                 //Explosion voxel debris
                 ExplosionDebrisCountMultiplier = 0.8f,
@@ -443,8 +411,8 @@ namespace VRageRender
                 LodTransitionDistanceBackgroundEnd = 5000,
                 LodClipmapRanges = new float[][]
                 { // base was 32f * 8f
-                    new float[] { 140f, 400f, 1000f, 2000f, 6000f, 18000f, 35000f, 100000f, },
-                    new float[] { 40f, 120f, 300f, 800f, 2400f, 5000f, },
+                    new float[] { 140f, 400f, 1000f, 2000f, 4500f, 13500f, 30000f, 100000f, },
+                    massiveClipmapLodRanges,
                 },
 
                 EnvironmentLodTransitionDistance = 50,
@@ -493,8 +461,6 @@ namespace VRageRender
 
                 //Geometry quality
                 UseNormals = true,
-                NeedReloadContent = false,
-                UseChannels = true,
 
                 // Spot shadow max distance multiplier 
                 SpotShadowsMaxDistanceMultiplier = 3.0f,
@@ -504,12 +470,6 @@ namespace VRageRender
 
                 // Distant impostors
                 EnableDistantImpostors = true,
-
-                // Flying debris
-                EnableFlyingDebris = true,
-
-                // Decals
-                EnableDecals = true,
 
                 //Explosion voxel debris
                 ExplosionDebrisCountMultiplier = 3.0f,

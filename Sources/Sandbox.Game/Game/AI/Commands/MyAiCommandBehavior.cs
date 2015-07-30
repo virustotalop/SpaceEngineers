@@ -62,11 +62,11 @@ namespace Sandbox.Game.AI.Commands
                 return;
             foreach (var hitInfo in m_tmpHitInfos)
             {
-                var ent = hitInfo.HkHitInfo.Body.GetEntity() as MyCharacter;
+                var ent = hitInfo.HkHitInfo.GetHitEntity() as MyCharacter;
                 if (ent != null)
                 {
                     MyAgentBot bot;
-                    if (TryGetBotForCharacter(ent, out bot))
+                    if (TryGetBotForCharacter(ent, out bot) && bot.BotDefinition.Commandable)
                     {
                         ChangeBotBehavior(bot);
                     }
@@ -79,7 +79,7 @@ namespace Sandbox.Game.AI.Commands
             foreach (var localBot in MyAIComponent.Static.Bots.GetAllBots())
             {
                 var agent = localBot as MyAgentBot;
-                if (agent != null)
+                if (agent != null && agent.BotDefinition.Commandable)
                 {
                     ChangeBotBehavior(agent);
                 }

@@ -26,6 +26,8 @@ using SteamSDK;
 using VRage;
 using Sandbox.Game.Localization;
 using VRage.Library.Utils;
+using VRage.Audio;
+using Sandbox.Game.Entities.Character.Components;
 
 #endregion
 
@@ -33,10 +35,10 @@ namespace Sandbox.Game.Multiplayer
 {
     delegate void ChangeMovementStateDelegate(MyCharacterMovementEnum state);
     delegate void SwitchCharacterModelDelegate(string model, Vector3 colorMaskHSV);
-    delegate void ChangeFlagsDelegate(bool enableJetpack, bool enableDampeners, bool enableLights, bool enableIronsight, bool enableBroadcast);
+    delegate void ChangeFlagsDelegate(bool enableJetpack, bool enableDampeners, bool enableLights, bool enableIronsight, bool enableBroadcast, bool targetFromCamera);
     delegate void ChangeHeadOrSpineDelegate(float headLocalXAngle, float headLocalYAngle, Quaternion spineRotation,
     Quaternion headRotation, Quaternion handRotation, Quaternion upperHandRotation);
-    delegate void DoDamageDelegate(float damage, MyDamageType damageType);
+    delegate void DoDamageDelegate(float damage, MyStringHash damageType, long attackerId);
 
     [PreloadRequired]
     class MySyncCharacter : MySyncControllableEntity
@@ -49,6 +51,7 @@ namespace Sandbox.Game.Multiplayer
             Lights = 0x4,
             Ironsight = 0x8,
             Broadcast = 0x10,
+            TargetFromCamera = 0x20,
         }
 
         [MessageId(2, P2PMessageEnum.Reliable)]
@@ -73,6 +76,7 @@ namespace Sandbox.Game.Multiplayer
             public bool EnableLights { get { return (Flags & CharacterFlags.Lights) != 0; } }
             public bool EnableIronsight { get { return (Flags & CharacterFlags.Ironsight) != 0; } }
             public bool EnableBroadcast { get { return (Flags & CharacterFlags.Broadcast) != 0; } }
+            public bool TargetFromCamera { get { return (Flags & CharacterFlags.TargetFromCamera) != 0; } }
         }
 
         [MessageId(4, SteamSDK.P2PMessageEnum.Unreliable)]
@@ -94,24 +98,25 @@ namespace Sandbox.Game.Multiplayer
         [ProtoContract]
         struct SwitchCharacterModelMsg : IEntityMessage
         {
-            [ProtoMember(1)]
+            [ProtoMember]
             public long CharacterEntityId;
             public long GetEntityId() { return CharacterEntityId; }
 
-            [ProtoMember(2)]
+            [ProtoMember]
             public string Model;
 
-            [ProtoMember(3)]
+            [ProtoMember]
             public Vector3 ColorMaskHSV;
         }
 
         [MessageId(7414, SteamSDK.P2PMessageEnum.Unreliable)]
-        struct CharacterInputMsg : IEntityMessage
+        public struct CharacterInputMsg : IEntityMessage
         {
             public long CharacterEntityId;
             public long GetEntityId() { return CharacterEntityId; }
 
             public Quaternion Orientation;
+            public Vector3D Position;
 
             public ushort ClientFrameId;
 
@@ -124,21 +129,23 @@ namespace Sandbox.Game.Multiplayer
         [ProtoContract]
         struct AnimationCommandMsg : IEntityMessage
         {
-            [ProtoMember(1)]
+            [ProtoMember]
             public long CharacterEntityId;
             public long GetEntityId() { return CharacterEntityId; }
 
-            [ProtoMember(2)]
+            [ProtoMember]
             public string AnimationSubtypeName;
-            [ProtoMember(3)]
-            public bool Loop;
-            [ProtoMember(4)]
-            public MyPlayAnimationMode Mode;
-            [ProtoMember(5)]
-            public MyBonesArea Area;
-            [ProtoMember(6)]
+            [ProtoMember]
+            public MyPlaybackCommand PlaybackCommand;
+            [ProtoMember]
+            public MyBlendOption BlendOption;
+            [ProtoMember]
+            public MyFrameOption FrameOption;
+            [ProtoMember]
+            public string Area;
+            [ProtoMember]
             public float BlendTime;
-            [ProtoMember(7)]
+            [ProtoMember]
             public float TimeScale;
         }
 
@@ -146,11 +153,11 @@ namespace Sandbox.Game.Multiplayer
         [ProtoContract]
         struct AttachToCockpitMsg : IEntityMessage
         {
-            [ProtoMember(1)]
+            [ProtoMember]
             public long CharacterEntityId;
             public long GetEntityId() { return CharacterEntityId; }
 
-            [ProtoMember(2)]
+            [ProtoMember]
             public long CockpitEntityId;
         }
 
@@ -176,12 +183,36 @@ namespace Sandbox.Game.Multiplayer
             public long EntityId;
             public long GetEntityId() { return EntityId; }
 
-            public int CueIdHash;
+            public MyCueId SoundId;
 
             public override string ToString()
             {
-                return String.Format("{0}, {1}", this.GetType().Name, this.CueIdHash);
+                return String.Format("{0}, {1}", this.GetType().Name, this.SoundId);
             }
+        }
+
+        [MessageId(7420, P2PMessageEnum.Unreliable)]
+        [ProtoContract]
+        struct RagdollTransformsMsg : IEntityMessage
+        {
+            [ProtoMember]
+            public long CharacterEntityId;
+            public long GetEntityId() { return CharacterEntityId; }
+
+            [ProtoMember]            
+            public int TransformsCount;
+
+            [ProtoMember]
+            public Vector3[] transformsPositions;
+
+            [ProtoMember]
+            public Quaternion[] transformsOrientations;
+
+            [ProtoMember]
+            public Quaternion worldOrientation;
+
+            [ProtoMember]
+            public Vector3 worldPosition;
         }
 
         static MySyncCharacter()
@@ -210,14 +241,59 @@ namespace Sandbox.Game.Multiplayer
             MySyncLayer.RegisterEntityMessage<MySyncCharacter, RefillFromBottleMsg>(OnRefillFromBottle, MyMessagePermissions.FromServer);
 
             MySyncLayer.RegisterEntityMessage<MySyncCharacter, PlaySecondarySoundMsg>(OnSecondarySoundPlay, MyMessagePermissions.ToServer | MyMessagePermissions.FromServer);
+
+            MySyncLayer.RegisterEntityMessage<MySyncCharacter, RagdollTransformsMsg>(OnRagdollTransformsUpdate, MyMessagePermissions.FromServer);
         }
+
+        private static void OnRagdollTransformsUpdate(MySyncCharacter syncObject, ref RagdollTransformsMsg message, MyNetworkClient sender)
+        {
+            var ragdollComponent = syncObject.Entity.Components.Get<MyCharacterRagdollComponent>();
+            if (ragdollComponent == null) return;
+            if (syncObject.Entity.Physics == null) return;
+            if (syncObject.Entity.Physics.Ragdoll == null) return;
+            if (ragdollComponent.RagdollMapper == null) return;
+            if (!syncObject.Entity.Physics.Ragdoll.IsAddedToWorld) return;
+            if (!ragdollComponent.RagdollMapper.IsActive) return;
+            Debug.Assert(message.worldOrientation != null && message.worldOrientation != Quaternion.Zero, "Received invalid ragdoll orientation from server!");
+            Debug.Assert(message.worldPosition != null && message.worldPosition != Vector3.Zero, "Received invalid ragdoll orientation from server!");
+            Debug.Assert(message.transformsOrientations != null && message.transformsPositions != null, "Received empty ragdoll transformations from server!");
+            Debug.Assert(message.transformsPositions.Count() == message.TransformsCount && message.transformsOrientations.Count() == message.TransformsCount, "Received ragdoll data count doesn't match!");
+            Matrix worldMatrix = Matrix.CreateFromQuaternion(message.worldOrientation);
+            worldMatrix.Translation = message.worldPosition;
+            Matrix[] transforms = new Matrix[message.TransformsCount];
+                        
+            for (int i = 0; i < message.TransformsCount; ++i)
+            {
+                transforms[i] = Matrix.CreateFromQuaternion(message.transformsOrientations[i]);
+                transforms[i].Translation = message.transformsPositions[i];
+            }
+
+            ragdollComponent.RagdollMapper.UpdateRigidBodiesTransformsSynced(message.TransformsCount, worldMatrix, transforms);
+        }
+
+        public void SendRagdollTransforms(Matrix world, Matrix[] localBodiesTransforms)
+        {
+            if (ResponsibleForUpdate(this))
+            {
+                var msg = new RagdollTransformsMsg();
+                msg.CharacterEntityId = Entity.EntityId;
+                msg.worldPosition = world.Translation;
+                msg.TransformsCount = localBodiesTransforms.Count();
+                msg.worldOrientation = Quaternion.CreateFromRotationMatrix(world.GetOrientation());
+                msg.transformsPositions = new Vector3[msg.TransformsCount];
+                msg.transformsOrientations = new Quaternion[msg.TransformsCount];
+                for (int i = 0; i < localBodiesTransforms.Count(); ++i )
+                {
+                    msg.transformsPositions[i] = localBodiesTransforms[i].Translation;
+                    msg.transformsOrientations[i] = Quaternion.CreateFromRotationMatrix(localBodiesTransforms[i].GetOrientation());
+                }
+                Sync.Layer.SendMessageToAll(ref msg);
+            }
+        }
+
 
         private ChangeHeadOrSpineMsg m_headMsg;
         private bool m_headDirty = false;
-
-        Vector3 m_moveIndicator;
-        Vector3 m_rotationIndicator;
-        MyCharacterMovementFlags m_movementFlags;
 
         public event ChangeMovementStateDelegate MovementStateChanged;
         public event SwitchCharacterModelDelegate CharacterModelSwitched;
@@ -237,13 +313,16 @@ namespace Sandbox.Game.Multiplayer
 
         public void ChangeMovementState(MyCharacterMovementEnum state)
         {
-            if (ResponsibleForUpdate(this))
+            if (!MyFakes.CHARACTER_SERVER_SYNC)
             {
-                var msg = new ChangeMovementStateMsg();
-                msg.CharacterEntityId = Entity.EntityId;
-                msg.MovementState = state;
+                if (ResponsibleForUpdate(this))
+                {
+                    var msg = new ChangeMovementStateMsg();
+                    msg.CharacterEntityId = Entity.EntityId;
+                    msg.MovementState = state;
 
-                Sync.Layer.SendMessageToAll(ref msg);
+                    Sync.Layer.SendMessageToAll(ref msg);
+                }
             }
         }
 
@@ -264,8 +343,9 @@ namespace Sandbox.Game.Multiplayer
             msg.CharacterEntityId = Entity.EntityId;
 
             msg.AnimationSubtypeName = command.AnimationSubtypeName;
-            msg.Loop = command.Loop;
-            msg.Mode = command.Mode;
+            msg.PlaybackCommand = command.PlaybackCommand;
+            msg.BlendOption = command.BlendOption;
+            msg.FrameOption = command.FrameOption;
             msg.BlendTime = command.BlendTime;
             msg.TimeScale = command.TimeScale;
 
@@ -277,11 +357,12 @@ namespace Sandbox.Game.Multiplayer
             sync.Entity.AddCommand(new MyAnimationCommand()
             {
                 AnimationSubtypeName = msg.AnimationSubtypeName,
-                Mode = msg.Mode,
+                PlaybackCommand = msg.PlaybackCommand,
+                BlendOption = msg.BlendOption,
+                FrameOption = msg.FrameOption,
                 Area = msg.Area,
                 BlendTime = msg.BlendTime,
                 TimeScale = msg.TimeScale,
-                Loop = msg.Loop
             });
 
         }
@@ -309,7 +390,7 @@ namespace Sandbox.Game.Multiplayer
             }
         }
 
-        public void ChangeFlags(bool enableJetpack, bool enableDampeners, bool enableLights, bool enableIronsight, bool enableBroadcast)
+        public void ChangeFlags(bool enableJetpack, bool enableDampeners, bool enableLights, bool enableIronsight, bool enableBroadcast, bool targetFromCamera)
         {
             if (ResponsibleForUpdate(this))
             {
@@ -321,18 +402,44 @@ namespace Sandbox.Game.Multiplayer
                 msg.Flags |= enableLights ? CharacterFlags.Lights : 0;
                 msg.Flags |= enableIronsight ? CharacterFlags.Ironsight : 0;
                 msg.Flags |= enableBroadcast ? CharacterFlags.Broadcast : 0;
+                msg.Flags |= targetFromCamera ? CharacterFlags.TargetFromCamera : 0;
 
                 Sync.Layer.SendMessageToAll(ref msg);
             }
+            else
+                if (MyFakes.CHARACTER_SERVER_SYNC && !Sync.IsServer)
+                {
+                    var msg = new ChangeFlagsMsg();
+                    msg.CharacterEntityId = Entity.EntityId;
+                    msg.Flags = 0;
+                    msg.Flags |= enableJetpack ? CharacterFlags.Jetpack : 0;
+                    msg.Flags |= enableDampeners ? CharacterFlags.Dampeners : 0;
+                    msg.Flags |= enableLights ? CharacterFlags.Lights : 0;
+                    msg.Flags |= enableIronsight ? CharacterFlags.Ironsight : 0;
+                    msg.Flags |= enableBroadcast ? CharacterFlags.Broadcast : 0;
+                    msg.Flags |= targetFromCamera ? CharacterFlags.TargetFromCamera : 0;
+
+                    Sync.Layer.SendMessageToServer(ref msg);
+                }
         }
 
         private static void OnFlagsChanged(MySyncCharacter sync, ref ChangeFlagsMsg msg, MyNetworkClient sender)
         {
+            if (MyFakes.CHARACTER_SERVER_SYNC)
+            {
+                var handler = sync.FlagsChanged;
+                if (handler != null)
+                    handler(msg.EnableJetpack, msg.EnableDampeners, msg.EnableLights, msg.EnableIronsight, msg.EnableBroadcast, msg.TargetFromCamera);
+
+                if (Sync.IsServer)
+                    Sync.Layer.SendMessageToAll(ref msg);
+            }
+            else
             if (sync.ResponsibleForUpdate(sender))
             {
                 var handler = sync.FlagsChanged;
                 if (handler != null)
-                    handler(msg.EnableJetpack, msg.EnableDampeners, msg.EnableLights, msg.EnableIronsight, msg.EnableBroadcast);
+                    handler(msg.EnableJetpack, msg.EnableDampeners, msg.EnableLights, msg.EnableIronsight, msg.EnableBroadcast, msg.TargetFromCamera);
             }
         }
 
@@ -381,9 +488,6 @@ namespace Sandbox.Game.Multiplayer
 
         public override void Tick()
         {
-            if (MyPerGameSettings.CharacterUpdatePositionPerFrame)
-                m_updateFrameCount = 1;
-
             base.Tick();
 
             if (!Entity.MarkedForClose && m_headDirty)
@@ -395,18 +499,47 @@ namespace Sandbox.Game.Multiplayer
         private static void OnCharacterInput(MySyncCharacter sync, ref CharacterInputMsg msg, MyNetworkClient sender)
         {
             sender.ClientFrameId = msg.ClientFrameId;
+            sync.CachedMovementState = msg;
 
-            if (sync.Entity.GetCurrentMovementState() != MyCharacterMovementEnum.Sitting && !sync.Entity.IsDead)
+            var matrix = MatrixD.CreateFromQuaternion(msg.Orientation);
+            matrix.Translation = msg.Position;
+            sync.Entity.WorldMatrix = matrix;
+
+            if (Sync.IsServer)
+                Sync.Layer.SendMessageToAllButOne(ref msg, sender.SteamUserId);            
+        }
+
+
+        public CharacterInputMsg CachedMovementState = new CharacterInputMsg();
+
+        public void MoveAndRotate(Vector3 moveIndicator, Vector3 rotationIndicator, MyCharacterMovementFlags movementFlags)
+        {
+            bool changed = 
+                CachedMovementState.MoveIndicator != moveIndicator ||
+                CachedMovementState.RotationIndicator != rotationIndicator ||
+                CachedMovementState.MovementFlags != movementFlags;
+
+            if (MyMultiplayer.Static != null && MyMultiplayer.Static.FrameCounter - m_lastUpdateFrame > 60)
+            {  //Send input even if nothing changed, because clients can be moved by other forces and we need to sync them somehow at low framerate
+                ResetUpdateTimer();
+                changed = true;
+            }
+
+            if (changed)
             {
-                // Set orientation
-                var pos = sync.Entity.PositionComp.GetPosition();
-                var m = Matrix.CreateFromQuaternion(msg.Orientation);
-                m.Translation = pos;
-                sync.Entity.WorldMatrix = m;
+                CharacterInputMsg msg = new CharacterInputMsg();
+                msg.CharacterEntityId = Entity.EntityId;
+                msg.MoveIndicator = moveIndicator;
+                msg.RotationIndicator = rotationIndicator;
+                msg.MovementFlags = movementFlags;
+                msg.Orientation = Quaternion.CreateFromRotationMatrix(Entity.WorldMatrix);
+                msg.Position = Entity.WorldMatrix.Translation;
+                CachedMovementState = msg;
 
-                sync.m_moveIndicator = msg.MoveIndicator;
-                sync.m_rotationIndicator = msg.RotationIndicator;
-                sync.m_movementFlags = msg.MovementFlags;
+                if (!Sync.IsServer)
+                    Sync.Layer.SendMessageToServer(ref msg);
+                else
+                    Sync.Layer.SendMessageToAll(ref msg);            
             }
         }
 
@@ -421,10 +554,7 @@ namespace Sandbox.Game.Multiplayer
             }
         }
 
-        public void MoveAndRotate()
-        {
-            ((MyCharacter)Entity).MoveAndRotate(m_moveIndicator, new Vector2(m_rotationIndicator.X, m_rotationIndicator.Y), m_rotationIndicator.Z, m_movementFlags);
-        }
+        
 
         #region Respawn 
 
@@ -453,72 +583,72 @@ namespace Sandbox.Game.Multiplayer
 
         #region Chat
         [ProtoContract]
-        [MessageId(7610, P2PMessageEnum.Reliable)]
+        [MessageId(7620, P2PMessageEnum.Reliable)]
         struct SendPlayerMessageMsg : IEntityMessage
         {
-            [ProtoMember(1)]
+            [ProtoMember]
             public long CharacterEntityId;
             public long GetEntityId() { return CharacterEntityId; }
 
-            [ProtoMember(2)]
+            [ProtoMember]
             public ulong SenderSteamId;
-            [ProtoMember(3)]
+            [ProtoMember]
             public ulong ReceiverSteamId;
-            [ProtoMember(4)]
+            [ProtoMember]
             public string Text;
-            [ProtoMember(5)]
+            [ProtoMember]
             public long Timestamp;
         }
 
         [ProtoContract]
-        [MessageId(7611, P2PMessageEnum.Reliable)]
+        [MessageId(7621, P2PMessageEnum.Reliable)]
         struct SendNewFactionMessageMsg : IEntityMessage
         {
-            [ProtoMember(1)]
+            [ProtoMember]
             public long CharacterEntityId;
             public long GetEntityId() { return CharacterEntityId; }
 
-            [ProtoMember(2)]
+            [ProtoMember]
             public long FactionId1;
-            [ProtoMember(3)]
+            [ProtoMember]
             public long FactionId2;
-            [ProtoMember(4)]
+            [ProtoMember]
             public MyObjectBuilder_FactionChatItem ChatItem;
         }
 
         [ProtoContract]
-        [MessageId(7613, P2PMessageEnum.Reliable)]
+        [MessageId(7623, P2PMessageEnum.Reliable)]
         struct ConfirmFactionMessageMsg : IEntityMessage
         {
-            [ProtoMember(1)]
+            [ProtoMember]
             public long CharacterEntityId;
             public long GetEntityId() { return CharacterEntityId; }
          
-            [ProtoMember(2)]
+            [ProtoMember]
             public long FactionId1;
-            [ProtoMember(3)]
+            [ProtoMember]
             public long FactionId2;
-            [ProtoMember(4)]
+            [ProtoMember]
             public long OriginalSenderId;
-            [ProtoMember(5)]
+            [ProtoMember]
             public long ReceiverId;
-            [ProtoMember(6)]
+            [ProtoMember]
             public long Timestamp;
-            [ProtoMember(7)]
+            [ProtoMember]
             public string Text;
         }
 
         [ProtoContract]
-        [MessageId(7614, P2PMessageEnum.Reliable)]
+        [MessageId(7624, P2PMessageEnum.Reliable)]
         struct SendGlobalMessageMsg : IEntityMessage
         {
-            [ProtoMember(1)]
+            [ProtoMember]
             public long CharacterEntityId;
             public long GetEntityId() { return CharacterEntityId; }
 
-            [ProtoMember(2)]
+            [ProtoMember]
             public ulong SenderSteamId;
-            [ProtoMember(3)]
+            [ProtoMember]
             public string Text;
         }
 
@@ -912,12 +1042,12 @@ namespace Sandbox.Game.Multiplayer
             }
         }
 
-        internal void PlaySecondarySound(int soundId)
+        internal void PlaySecondarySound(MyCueId soundId)
         {
             var msg = new PlaySecondarySoundMsg()
             {
                 EntityId = this.SyncedEntityId,
-                CueIdHash = soundId,
+                SoundId = soundId,
             };
 
             if (Sync.IsServer)
@@ -934,8 +1064,7 @@ namespace Sandbox.Game.Multiplayer
         {
             if (!MySandboxGame.IsDedicated)
             {
-                MyStringId soundId = MyStringId.TryGet(msg.CueIdHash);
-                syncObject.Entity.StartSecondarySound(soundId, sync: false);
+                syncObject.Entity.StartSecondarySound(msg.SoundId, sync: false);
             }
 
             if (Sync.IsServer)

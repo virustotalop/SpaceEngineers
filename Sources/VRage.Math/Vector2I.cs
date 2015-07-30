@@ -13,9 +13,9 @@ namespace VRageMath
         public static Vector2I UnitX = new Vector2I(1, 0);
         public static Vector2I UnitY = new Vector2I(0, 1);
 
-        [ProtoBuf.ProtoMember(1)]
+        [ProtoBuf.ProtoMember]
         public int X;
-        [ProtoBuf.ProtoMember(2)]
+        [ProtoBuf.ProtoMember]
         public int Y;
 
         public Vector2I(int x, int y)
@@ -67,6 +67,16 @@ namespace VRageMath
         {
             return new Vector2I(value1.X / divider,
                                 value1.Y / divider);
+        }
+
+        public static Vector2I Floor(Vector2 value)
+        {
+            return new Vector2I((int)Math.Floor(value.X), (int)Math.Floor(value.Y));
+        }
+
+        public static Vector2I Round(Vector2 value)
+        {
+            return new Vector2I((int)Math.Round(value.X), (int)Math.Round(value.Y));
         }
 
         #region Comparer

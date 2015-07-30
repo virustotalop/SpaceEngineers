@@ -1,33 +1,31 @@
 ﻿using Havok;
+using Sandbox.Common;
+using Sandbox.Common.ModAPI;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Common.ObjectBuilders.Definitions;
+using Sandbox.Definitions;
 using Sandbox.Engine.Physics;
+using Sandbox.Engine.Utils;
+using Sandbox.Game.Entities.Character;
+using Sandbox.Game.Entities.Debris;
+using Sandbox.Game.GameSystems;
+using Sandbox.Game.Multiplayer;
+using Sandbox.Game.World;
+using Sandbox.Graphics.TransparentGeometry.Particles;
+using Sandbox.ModAPI;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
-using VRageMath;
-using Sandbox.Engine.Utils;
-using VRage.Trace;
-using Sandbox.Game.Entities.Debris;
 using VRage;
-using Sandbox.Game.World;
-using Sandbox.Graphics.TransparentGeometry.Particles;
-using Sandbox.Game.Gui;
-using Sandbox.Game.Weapons;
-using Sandbox.Game.Multiplayer;
-using Sandbox.Graphics;
-using VRage;
-using Sandbox.Common;
-using VRageRender;
 using VRage.Collections;
-using Sandbox.Definitions;
-using Sandbox.Game.GameSystems;
-using Sandbox.Game.Entities.Character;
-using Sandbox.ModAPI;
-using VRage.Library.Utils;
+using VRage.Utils;
+using VRageMath;
+using VRageRender;
+using VRage.Components;
+using VRage.ModAPI;
+using Sandbox.Game.Entities.EnvironmentItems;
 
 namespace Sandbox.Game.Entities.Cube
 {
@@ -186,7 +184,11 @@ namespace Sandbox.Game.Entities.Cube
                 if (!MyPerGameSettings.Destruction)
                     RigidBody.ContactPointCallback += RigidBody_ContactPointCallback;
                 else
+                {
                     RigidBody.ContactPointCallback += RigidBody_ContactPointCallback_Destruction;
+                    BreakableBody.BeforeControllerOperation += BreakableBody_BeforeControllerOperation;
+                    BreakableBody.AfterControllerOperation += BreakableBody_AfterControllerOperation;
+                }
 
                 RigidBody.LinearDamping = MyPerGameSettings.DefaultLinearDamping;
                 RigidBody.AngularDamping = MyPerGameSettings.DefaultAngularDamping;
@@ -212,7 +214,7 @@ namespace Sandbox.Game.Entities.Cube
             {
                 RigidBody.MaxAngularVelocity = GetLargeShipMaxAngularVelocity();
                 RigidBody.MaxLinearVelocity = LargeShipMaxLinearVelocity();
-                RigidBody.Layer = flags == RigidBodyFlag.RBF_DOUBLED_KINEMATIC ? MyPhysics.DynamicDoubledCollisionLayer : MyPhysics.DefaultCollisionLayer;
+                RigidBody.Layer = flags == RigidBodyFlag.RBF_DOUBLED_KINEMATIC && MyFakes.ENABLE_DOUBLED_KINEMATIC ? MyPhysics.DynamicDoubledCollisionLayer : MyPhysics.DefaultCollisionLayer;
             }
             else if (m_grid.GridSizeEnum == MyCubeSize.Small)
             {
@@ -239,6 +241,22 @@ namespace Sandbox.Game.Entities.Cube
             ProfilerShort.End();
         }
 
+        void BreakableBody_AfterControllerOperation(HkdBreakableBody b)
+        {
+            ProfilerShort.Begin("BreakableBody_AfterControllerOperation");
+            if (m_recreateBody)
+                b.BreakableShape.SetStrenghtRecursively(MyDestructionConstants.STRENGTH,0.7f);
+            ProfilerShort.End();
+        }
+
+        void BreakableBody_BeforeControllerOperation(HkdBreakableBody b)
+        {
+            ProfilerShort.Begin("BreakableBody_AfterControllerOperation");
+            if (m_recreateBody)
+                b.BreakableShape.SetStrenghtRecursively(float.MaxValue, 0.7f);
+            ProfilerShort.End();
+        }
+
         protected override void ActivateCollision()
         {
             HavokCollisionSystemID = m_world.GetCollisionFilter().GetNewSystemGroup();//grids now have unique group, so collision between [sub]parts can be filtered out
@@ -254,12 +272,12 @@ namespace Sandbox.Game.Entities.Cube
             }
             m_grid.HavokSystemIDChanged(HavokCollisionSystemID);
         }
-    
+
         public override void Activate(object world, ulong clusterObjectID)
         {
             base.Activate(world, clusterObjectID);
 
-            if (MySession.Static.DestructibleBlocks)
+            if (m_grid.BlocksDestructionEnabled)
                 MarkBreakable((HkWorld)world);
         }
 
@@ -267,14 +285,14 @@ namespace Sandbox.Game.Entities.Cube
         {
             base.ActivateBatch(world, clusterObjectID);
 
-            if (MySession.Static.DestructibleBlocks)
+            if (m_grid.BlocksDestructionEnabled)
                 MarkBreakable((HkWorld)world);
             //DestructionBody.ConnectToWorld((HkWorld)world, 0.05f);
         }
 
         public override void Deactivate(object world)
         {
-            if (MySession.Static.DestructibleBlocks)
+            if (m_grid.BlocksDestructionEnabled)
                 UnmarkBreakable((HkWorld)world);
 
             base.Deactivate(world);
@@ -282,10 +300,15 @@ namespace Sandbox.Game.Entities.Cube
 
         public override void DeactivateBatch(object world)
         {
-            if (MySession.Static.DestructibleBlocks)
+            if (m_grid.BlocksDestructionEnabled)
                 UnmarkBreakable((HkWorld)world);
 
             base.DeactivateBatch(world);
+        }
+
+        public override HkShape GetShape()
+        {
+            return Shape;
         }
 
         private void MarkBreakable(HkWorld world)
@@ -317,30 +340,30 @@ namespace Sandbox.Game.Entities.Cube
             ProfilerShort.Begin("Grid Contact counter");
             ProfilerShort.End();
 
-            var entity1 = value.Base.BodyA.GetEntity();
-            var entity2 = value.Base.BodyB.GetEntity();
-            if (entity1 == null || entity2 == null)
+            var otherEntity = value.GetOtherEntity(m_grid);
+            var thisEntity = m_grid;
+            if (otherEntity == null || thisEntity == null)
                 return;
 
             //DA used to stop appliyng force when there is planet/ship collisions to  increase performance after ship crashes on planet
-            if((Math.Abs(value.SeparatingVelocity) < 0.3f)&&( entity1 is MyVoxelMap || entity2 is MyVoxelMap))
+            if ((Math.Abs(value.SeparatingVelocity) < 0.3f) && (otherEntity is MyTrees || otherEntity is MyVoxelPhysics))
             {
                 return;
             }
 
             MyGridContactInfo info = new MyGridContactInfo(ref value, m_grid);
 
-            var myBody = value.Base.BodyA.GetEntity() == m_grid.Components ? value.Base.BodyA : value.Base.BodyB;
+            var myBody = RigidBody;// value.Base.BodyA.GetEntity() == m_grid.Components ? value.Base.BodyA : value.Base.BodyB;
 
             // CH: DEBUG
-           
+
 
             if (info.CollidingEntity is Sandbox.Game.Entities.Character.MyCharacter || info.CollidingEntity.MarkedForClose)
                 return;
 
-            if (MyFakes.LANDING_GEAR_IGNORE_DAMAGE_CONTACTS && MyCubeGridGroups.Static.NoContactDamage.HasSameGroupAndIsGrid(entity1, entity2))
+            if (MyFakes.LANDING_GEAR_IGNORE_DAMAGE_CONTACTS && MyCubeGridGroups.Static.NoContactDamage.HasSameGroupAndIsGrid(otherEntity, thisEntity))
                 return;
-            
+
             ProfilerShort.Begin("Grid contact point callback");
             bool doSparks = MyPerGameSettings.EnableCollisionSparksEffect && (info.CollidingEntity is MyCubeGrid || info.CollidingEntity is MyVoxelMap);
 
@@ -353,7 +376,7 @@ namespace Sandbox.Game.Entities.Cube
 
             bool deformationPerformed = false;
 
-            if (Sync.IsServer && value.ContactProperties.ImpulseApplied > MyGridShape.BreakImpulse && info.CollidingEntity != null && info.EnableDeformation && MySession.Static.DestructibleBlocks)
+            if (Sync.IsServer && value.ContactProperties.ImpulseApplied > MyGridShape.BreakImpulse && info.CollidingEntity != null && info.EnableDeformation && m_grid.BlocksDestructionEnabled)
             {
                 float deformation = value.SeparatingVelocity;
                 if (info.RubberDeformation)
@@ -362,7 +385,7 @@ namespace Sandbox.Game.Entities.Cube
                 }
 
                 HkBreakOffPointInfo breakInfo = CreateBreakOffPoint(value, info.ContactPosition, MyGridShape.BreakImpulse);
-                PerformDeformation(ref breakInfo, false, value.SeparatingVelocity);
+                PerformDeformation(ref breakInfo, false, value.SeparatingVelocity, otherEntity as MyEntity);
                 deformationPerformed = true;
             }
             else if (doSparks && value.SeparatingVelocity > 2.0f && value.ContactProperties.WasUsed && !m_lastContacts.ContainsKey(value.ContactPointId) && info.EnableParticles)
@@ -396,46 +419,35 @@ namespace Sandbox.Game.Entities.Cube
             var myEntity = info.CurrentEntity;//value.Base.BodyA.GetEntity() == m_grid.Components ? value.Base.BodyA.GetEntity() : value.Base.BodyB.GetEntity();
 
             // CH: DEBUG
-            var entity1 = value.Base.BodyA.GetEntity();
-            var entity2 = value.Base.BodyB.GetEntity();
+            var entity1 = value.GetPhysicsBody(0).Entity;
+            var entity2 = value.GetPhysicsBody(1).Entity;
 
             var rigidBody1 = value.Base.BodyA;
             var rigidBody2 = value.Base.BodyB;
 
+            if (entity1 == null || entity2 == null || entity1.Physics == null || entity2.Physics == null)
+                return;
+
             if (entity1 is MyFracturedPiece && entity2 is MyFracturedPiece)
                 return;
 
-
-            if (entity1 == null || entity2 == null || entity1.Physics == null || entity2.Physics == null)
+            info.HandleEvents();
+            if (rigidBody1.HasProperty(HkCharacterRigidBody.MANIPULATED_OBJECT) || rigidBody2.HasProperty(HkCharacterRigidBody.MANIPULATED_OBJECT))
                 return;
 
             if (info.CollidingEntity is Sandbox.Game.Entities.Character.MyCharacter || info.CollidingEntity == null || info.CollidingEntity.MarkedForClose)
                 return;
 
-            if (MyFakes.ENABLE_CHARACTER_VIRTUAL_PHYSICS)
-            {
-                MyCharacter character = MySession.ControlledEntity as MyCharacter;
-                if (character != null && character.VirtualPhysics != null)
-                {
-                    foreach (var constraint in character.VirtualPhysics.Constraints) 
-                    {
-                        IMyEntity cstrEntityA = constraint.RigidBodyA.GetEntity();
-                        IMyEntity cstrEntityB = constraint.RigidBodyB.GetEntity();
+            var grid1 = entity1 as MyCubeGrid;
+            var grid2 = entity2 as MyCubeGrid;
 
-                        if (info.CurrentEntity == cstrEntityA || info.CurrentEntity == cstrEntityB || info.CollidingEntity == cstrEntityA || info.CollidingEntity == cstrEntityB)
-                            return;
-                    }
-                }
-            }
-
-            if (entity1 is MyCubeGrid && entity2 is MyCubeGrid && (MyCubeGridGroups.Static.Physical.GetGroup((MyCubeGrid)entity1) == MyCubeGridGroups.Static.Physical.GetGroup((MyCubeGrid)entity2)))
+            if (grid1 != null && grid2 != null && (MyCubeGridGroups.Static.Physical.GetGroup(grid1) == MyCubeGridGroups.Static.Physical.GetGroup(grid2)))
                 return;
 
             ProfilerShort.Begin("Grid contact point callback");
 
             if (Sync.IsServer)
             {
-                info.HandleEvents();
                 var vel = Math.Abs(value.SeparatingVelocity);
                 bool enoughSpeed = vel > 3;
                 //float dot = Vector3.Dot(Vector3.Normalize(LinearVelocity), Vector3.Normalize(info.CollidingEntity.Physics.LinearVelocity));
@@ -459,26 +471,26 @@ namespace Sandbox.Game.Entities.Cube
                 float dot1withNormal = speed1 > 0 ? Vector3.Dot(dir1, value.ContactPoint.Normal) : 0;
                 float dot2withNormal = speed2 > 0 ? Vector3.Dot(dir2, value.ContactPoint.Normal) : 0;
 
+                speed1 *= Math.Abs(dot1withNormal);
+                speed2 *= Math.Abs(dot2withNormal);
+
                 bool is1Static = mass1 == 0;
                 bool is2Static = mass2 == 0;
 
-                bool is1Small = entity1 is MyFracturedPiece || (entity1 is MyCubeGrid && ((MyCubeGrid)entity1).GridSizeEnum == MyCubeSize.Small);
-                bool is2Small = entity2 is MyFracturedPiece || (entity2 is MyCubeGrid && ((MyCubeGrid)entity2).GridSizeEnum == MyCubeSize.Small);
-                
+                bool is1Small = entity1 is MyFracturedPiece || (grid1 != null && grid1.GridSizeEnum == MyCubeSize.Small);
+                bool is2Small = entity2 is MyFracturedPiece || (grid2 != null && grid2.GridSizeEnum == MyCubeSize.Small);
+
 
                 float dot = Vector3.Dot(dir1, dir2);
 
                 float maxDestructionRadius = 0.5f;
-                if (entity1 is MyCubeGrid)
-                    maxDestructionRadius = Math.Max(maxDestructionRadius, 3 * ((MyCubeGrid)entity1).GridSize);
-                if (entity2 is MyCubeGrid)
-                    maxDestructionRadius = Math.Max(maxDestructionRadius, 3 * ((MyCubeGrid)entity2).GridSize);
-
-                maxDestructionRadius = Math.Min(maxDestructionRadius, 3);
-
 
                 impact1 *= info.ImpulseMultiplier;
                 impact2 *= info.ImpulseMultiplier;
+
+                MyHitInfo hitInfo = new MyHitInfo();
+                var hitPos = info.ContactPosition;
+                hitInfo.Normal = value.ContactPoint.Normal;
 
                 //direct hit
                 if (dot1withNormal < 0.0f)
@@ -498,8 +510,23 @@ namespace Sandbox.Game.Entities.Cube
 
                         if (is2Static || impact1 / impact2 > 10)
                         {
-                            CreateDestructionFor(impact1, LinearVelocity + info.CollidingEntity.Physics.LinearVelocity, (MyPhysicsBody)entity1.Physics, info, value.ContactPoint.Normal, maxDestructionRadius);
-                            CreateDestructionFor(impact1, LinearVelocity + info.CollidingEntity.Physics.LinearVelocity, (MyPhysicsBody)entity2.Physics, info, value.ContactPoint.Normal, maxDestructionRadius);
+                            hitInfo.Position = hitPos + 0.1f * hitInfo.Normal;
+                            impact1 -= mass1;
+                            if (grid1 != null)
+                            {
+                                var blockPos = GetGridPosition(value, grid1, 0);
+                                grid1.DoDamage(impact1, hitInfo, blockPos, grid2 != null ? grid2.EntityId : 0);
+                            }
+                            else
+                                MyDestructionHelper.TriggerDestruction(impact1, (MyPhysicsBody)entity1.Physics, info.ContactPosition, value.ContactPoint.Normal, maxDestructionRadius);
+                            hitInfo.Position = hitPos - 0.1f * hitInfo.Normal;
+                            if (grid2 != null)
+                            {
+                                var blockPos = GetGridPosition(value, grid2, 1);
+                                grid2.DoDamage(impact1, hitInfo, blockPos, grid1 != null ? grid1.EntityId : 0);
+                            }
+                            else
+                                MyDestructionHelper.TriggerDestruction(impact1, (MyPhysicsBody)entity2.Physics, info.ContactPosition, value.ContactPoint.Normal, maxDestructionRadius);
 
                             ReduceVelocities(info);
                         }
@@ -514,13 +541,28 @@ namespace Sandbox.Game.Entities.Cube
                     impact2 *= Math.Abs(dot1withNormal); //respect angle of hit
 
                     if (impact2 > 2000 && speed2 > 2 && !is1Small ||
-                        (impact2 > 500 && speed1 > 10)) //must be fast enought to destroy fracture piece (projectile)
+                        (impact2 > 500 && speed2 > 10)) //must be fast enought to destroy fracture piece (projectile)
                     {  //2 is big hitting
 
                         if (is1Static || impact2 / impact1 > 10)
                         {
-                            CreateDestructionFor(impact2, LinearVelocity + info.CollidingEntity.Physics.LinearVelocity, (MyPhysicsBody)entity1.Physics, info, value.ContactPoint.Normal, maxDestructionRadius);
-                            CreateDestructionFor(impact2, LinearVelocity + info.CollidingEntity.Physics.LinearVelocity, (MyPhysicsBody)entity2.Physics, info, value.ContactPoint.Normal, maxDestructionRadius);
+                            hitInfo.Position = hitPos + 0.1f * hitInfo.Normal;
+                            impact2 -= mass2;
+                            if (grid1 != null)
+                            {
+                                var blockPos = GetGridPosition(value, grid1, 0);
+                                grid1.DoDamage(impact2, hitInfo, blockPos, grid2 != null ? grid2.EntityId : 0);
+                            }
+                            else
+                                MyDestructionHelper.TriggerDestruction(impact2, (MyPhysicsBody)entity1.Physics, info.ContactPosition, value.ContactPoint.Normal, maxDestructionRadius);
+                            hitInfo.Position = hitPos - 0.1f * hitInfo.Normal;
+                            if (grid2 != null)
+                            {
+                                var blockPos = GetGridPosition(value, grid2, 1);
+                                grid2.DoDamage(impact2, hitInfo, blockPos, grid1 != null ? grid1.EntityId : 0);
+                            }
+                            else
+                                MyDestructionHelper.TriggerDestruction(impact2, (MyPhysicsBody)entity2.Physics, info.ContactPosition, value.ContactPoint.Normal, maxDestructionRadius);
 
                             ReduceVelocities(info);
                         }
@@ -542,6 +584,13 @@ namespace Sandbox.Game.Entities.Cube
             ProfilerShort.End();
         }
 
+        private static Vector3 GetGridPosition(HkContactPointEvent value, MyCubeGrid grid, int body)
+        {
+            var position = value.ContactPoint.Position + (body == 0 ? 0.1f : -0.1f) * value.ContactPoint.Normal;
+            var local = Vector3.Transform(value.ContactPoint.Position, Matrix.Invert(value.Base.GetRigidBody(body).GetRigidBodyMatrix()));
+            return local;
+        }
+
         private MyGridContactInfo ReduceVelocities(MyGridContactInfo info)
         {
             info.Event.AccessVelocities(0);
@@ -554,41 +603,6 @@ namespace Sandbox.Game.Entities.Cube
             info.Event.UpdateVelocities(1);
             return info;
         }
-
-        void CreateDestructionFor(float destructionImpact, Vector3 contactVelocity, MyPhysicsBody body, MyGridContactInfo info, Vector3 normal, float maxDestructionRadius)
-        {
-            if (body.BreakableBody != null)
-            {
-                float collidingMass = body.Mass == 0 ? Mass : body.Mass; //fall on voxel
-                float destructionRadius = Math.Min(destructionImpact / 8000, maxDestructionRadius);
-                float destructionImpulse = MyDestructionConstants.STRENGTH + destructionImpact / 10000;
-                float expandVelocity = Math.Min(destructionImpact / 10000, 3);
-
-                MyPhysics.FractureImpactDetails destruction;
-                HkdFractureImpactDetails details;
-                details = HkdFractureImpactDetails.Create();
-                details.SetBreakingBody(body.RigidBody);
-                details.SetContactPoint(WorldToCluster(info.ContactPosition));
-                details.SetDestructionRadius(destructionRadius);
-                details.SetBreakingImpulse(destructionImpulse);
-                details.SetParticleExpandVelocity(expandVelocity);
-                details.SetParticleVelocity(contactVelocity);
-                details.SetParticlePosition(WorldToCluster(info.ContactPosition - normal * 0.25f));
-                details.SetParticleMass(collidingMass);
-                details.ZeroCollidingParticleVelocity();
-                details.Flag = details.Flag | HkdFractureImpactDetails.Flags.FLAG_DONT_RECURSE | HkdFractureImpactDetails.Flags.FLAG_TRIGGERED_DESTRUCTION;
-
-                destruction = new MyPhysics.FractureImpactDetails();
-                destruction.Details = details;
-                destruction.World = HavokWorld;
-                destruction.ContactInWorld = info.ContactPosition;
-                destruction.Entity = (MyEntity)body.Entity;
-
-                MyPhysics.EnqueueDestruction(destruction);
-            }
-        }
-
-
 
         HkBreakOffPointInfo CreateBreakOffPoint(HkContactPointEvent value, Vector3D contactPosition, float breakImpulse)
         {
@@ -663,7 +677,7 @@ namespace Sandbox.Game.Entities.Cube
             MyPhysics.CastRay(pt.ContactPoint.Position, pt.ContactPoint.Position - softAreaVertical * Vector3.Normalize(pt.ContactPoint.Normal), m_hitList);
             foreach (var hit in m_hitList)
             {
-                var entity = hit.HkHitInfo.Body.GetEntity();
+                var entity = hit.HkHitInfo.GetHitEntity();
                 if (entity != m_grid.Components && entity is MyCubeGrid)
                 {
                     var grid = entity as MyCubeGrid;
@@ -699,7 +713,7 @@ namespace Sandbox.Game.Entities.Cube
             ProfilerShort.End();
         }
 
-        private void PerformDeformation(ref HkBreakOffPointInfo pt, bool fromBreakParts, float separatingVelocity)
+        private void PerformDeformation(ref HkBreakOffPointInfo pt, bool fromBreakParts, float separatingVelocity, MyEntity otherEntity)
         {
             ProfilerShort.Begin("PerformDeformation");
 
@@ -710,7 +724,7 @@ namespace Sandbox.Game.Entities.Cube
             {
                 mass = pt.CollidingBody.Mass;
             }
-            
+
             float velocity = separatingVelocity;
             float deltaV = pt.BreakingImpulse / mass;
 
@@ -725,7 +739,6 @@ namespace Sandbox.Game.Entities.Cube
             deformationOffset = Math.Min(deformationOffset, maxDeformationHardLimit);
 
             float explosionRadius = Math.Max(m_grid.GridSize, deformationOffset);
-            MyEntity otherEntity = pt.CollidingBody.GetEntity() as MyEntity;
             bool hitVoxel = otherEntity is MyVoxelMap;
             if (hitVoxel)
             {
@@ -742,7 +755,7 @@ namespace Sandbox.Game.Entities.Cube
             var pos = Vector3D.Transform(pt.ContactPosition, invWorld);
             var normal = Vector3D.TransformNormal(pt.ContactPoint.Normal, invWorld) * pt.ContactPointDirection;
 
-            bool destroyed = ApplyDeformation(deformationOffset, softAreaPlanar, softAreaVertical, pos, normal, MyDamageType.Deformation);
+            bool destroyed = ApplyDeformation(deformationOffset, softAreaPlanar, softAreaVertical, pos, normal, MyDamageType.Deformation, attackerId: otherEntity != null ? otherEntity.EntityId : 0);
 
             if (explosionRadius > 0 && deformationOffset > m_grid.GridSize / 2 && destroyed)
             {
@@ -773,7 +786,7 @@ namespace Sandbox.Game.Entities.Cube
         /// </summary>
         /// <param name="deformationOffset">Amount of deformation in the localPos</param>
         /// <param name="offsetThreshold">When deformation offset for bone is lower then threshold, it won't move the bone at all or do damage</param>
-        public bool ApplyDeformation(float deformationOffset, float softAreaPlanar, float softAreaVertical, Vector3 localPos, Vector3 localNormal, MyDamageType damageType, float offsetThreshold = 0, float lowerRatioLimit = 0)
+        public bool ApplyDeformation(float deformationOffset, float softAreaPlanar, float softAreaVertical, Vector3 localPos, Vector3 localNormal, MyStringHash damageType, float offsetThreshold = 0, float lowerRatioLimit = 0, long attackerId = 0)
         {
             offsetThreshold /= m_grid.GridSizeEnum == MyCubeSize.Large ? 1 : 5;
             float roundSize = m_grid.GridSize / m_grid.Skeleton.BoneDensity;
@@ -833,6 +846,14 @@ namespace Sandbox.Game.Entities.Cube
                                 var block = m_grid.GetCubeBlock(offset);
                                 if (block != null)
                                 {
+                                    bool allowDeformation = true;
+                                    MyDamageInformation damageInfo = new MyDamageInformation(true, 1f, MyDamageType.Deformation, attackerId);
+                                    if (block.UseDamageSystem)
+                                        MyDamageSystem.Static.RaiseBeforeDamageApplied(block, ref damageInfo);
+
+                                    if (damageInfo.Amount == 0f)
+                                        continue;
+
                                     minDeformationRatio = Math.Min(minDeformationRatio, block.DeformationRatio);
 
                                     if (Math.Max(lowerRatioLimit, block.DeformationRatio) * deformation > breakOffsetDestruction)
@@ -882,8 +903,19 @@ namespace Sandbox.Game.Entities.Cube
                 ProfilerShort.Begin("Deform bones");
                 Vector3 bone;
                 Vector3I offset;
-                foreach (var b in m_tmpBoneList)
+                foreach (var b in m_tmpBoneList)                
                 {
+                    // Check to see if this block can be deformed.  For mods
+                    if (b.Value != null)
+                    {
+                        MyDamageInformation damageInfo = new MyDamageInformation(true, 1f, MyDamageType.Deformation, attackerId);
+                        if (b.Value.UseDamageSystem)
+                            MyDamageSystem.Static.RaiseBeforeDamageApplied(b.Value, ref damageInfo);
+
+                        if(damageInfo.Amount == 0f)
+                            continue;
+                    }
+
                     var boneIndex = b.Key;
                     offset = boneIndex - gridPos * m_grid.Skeleton.BoneDensity;
 
@@ -938,7 +970,7 @@ namespace Sandbox.Game.Entities.Cube
                         if (Math.Abs(bone.X) > breakOffset || Math.Abs(bone.Y) > breakOffset || Math.Abs(bone.Z) > breakOffset)
                         {
                             m_tmpCubeList.Clear();
-                            
+
                             Vector3I wrappedBoneOffset = offset;
                             Vector3I wrappedGridPos = gridPos;
                             m_grid.Skeleton.Wrap(ref wrappedGridPos, ref wrappedBoneOffset);
@@ -1026,7 +1058,7 @@ namespace Sandbox.Game.Entities.Cube
 
             m_effectsPerFrame++;
 
-            
+
             float scale = MyPerGameSettings.DestructionParticle.Scale;
             if (m_grid.GridSizeEnum != MyCubeSize.Large)
                 scale = 0.05f;
@@ -1045,7 +1077,7 @@ namespace Sandbox.Game.Entities.Cube
             }
         }
 
-        public override VRage.Library.Utils.MyStringId GetMaterialAt(Vector3D worldPos)
+        public override MyStringHash GetMaterialAt(Vector3D worldPos)
         {
             var pos = Vector3.Transform(worldPos, m_grid.PositionComp.WorldMatrixNormalizedInv) / m_grid.GridSize;
             Vector3I cubePos;
@@ -1056,7 +1088,7 @@ namespace Sandbox.Game.Entities.Cube
             if (cube.FatBlock is MyCompoundCubeBlock)
                 cube = (cube.FatBlock as MyCompoundCubeBlock).GetBlocks()[0];
             var blockMaterial = cube.BlockDefinition.PhysicalMaterial.Id.SubtypeId;
-            return blockMaterial != VRage.Library.Utils.MyStringId.NullOrEmpty ? blockMaterial : base.GetMaterialAt(worldPos);
+            return blockMaterial != MyStringHash.NullOrEmpty ? blockMaterial : base.GetMaterialAt(worldPos);
         }
 
         /// <summary>
@@ -1158,7 +1190,7 @@ namespace Sandbox.Game.Entities.Cube
             {
                 if (m_dirtyCubesInfo.DirtyBlocks.Count > 0)
                 {
-                    m_shape.RefreshBlocks(RigidBody, RigidBody2, m_dirtyCubesInfo, BreakableBody);
+                    m_shape.RefreshBlocks(IsWelded ? WeldedRigidBody : RigidBody, RigidBody2, m_dirtyCubesInfo, BreakableBody);
                     if (RigidBody.IsActive && !HavokWorld.ActiveRigidBodies.Contains(RigidBody))
                     {
                         HavokWorld.ActiveRigidBodies.Add(RigidBody);
@@ -1270,7 +1302,7 @@ namespace Sandbox.Game.Entities.Cube
             }
             else
             {
-                base.CreateBody(ref shape, massProperties);            
+                base.CreateBody(ref shape, massProperties);
             }
         }
 
@@ -1324,7 +1356,7 @@ namespace Sandbox.Game.Entities.Cube
                     var bBody = MyFracturedPiecesManager.Static.GetBreakableBody(b);
                     var bodyMatrix = bBody.GetRigidBody().GetRigidBodyMatrix();
                     var pos = ClusterToWorld(bodyMatrix.Translation);
-                     
+
                     MySlimBlock cb;
                     var shape = bBody.BreakableShape;
                     ProfilerShort.Begin("GetPositionProp");
@@ -1361,13 +1393,13 @@ namespace Sandbox.Game.Entities.Cube
                     }
                     else
                     {
-                        Debug.Fail("Fracture piece missing block!");
+                        //Debug.Fail("Fracture piece missing block!");//safe to ignore
                         removePiece = true;
                     }
                     if (removePiece)
                     {
-                        MyFracturedPiecesManager.Static.ReturnToPool(bBody);
                         HavokWorld.DestructionWorld.RemoveBreakableBody(b);
+                        MyFracturedPiecesManager.Static.ReturnToPool(bBody);
                     }
                     ProfilerShort.End();
                 }
@@ -1378,14 +1410,14 @@ namespace Sandbox.Game.Entities.Cube
             foreach (var cb in lst)
             {
                 var b = m_grid.GetCubeBlock(cb.Position);
-                if ( b!= null)
+                if (b != null)
                 {
-                    if(b.FatBlock != null)
+                    if (b.FatBlock != null)
                         b.FatBlock.OnDestroy();
                     m_grid.RemoveBlock(b, true);
-                    if(first)
+                    if (first)
                     {
-                        PlayDestructionSound(b);
+                        MyAudioComponent.PlayDestructionSound(b);
                         first = false;
                     }
                 }
@@ -1397,38 +1429,8 @@ namespace Sandbox.Game.Entities.Cube
             ProfilerShort.End();
         }
 
-        private void PlayDestructionSound(MySlimBlock b)
-        {
-            MyPhysicalMaterialDefinition def = null;
-            if(b.FatBlock is MyCompoundCubeBlock)
-            {
-                def = (b.FatBlock as MyCompoundCubeBlock).GetBlocks()[0].BlockDefinition.PhysicalMaterial;
-            }
-            else if (b.FatBlock is MyFracturedBlock)
-            {
-                MyCubeBlockDefinition bDef;
-                if(MyDefinitionManager.Static.TryGetDefinition<MyCubeBlockDefinition>((b.FatBlock as MyFracturedBlock).OriginalBlocks[0], out bDef))
-                    def = bDef.PhysicalMaterial;
-            }
-            else
-                def = b.BlockDefinition.PhysicalMaterial;
-
-            if(def == null)
-                return;
-
-            MySoundPair destructionCue;
-            if (def.GeneralSounds.TryGetValue(m_destructionSound, out destructionCue) && destructionCue.SoundId != MyStringId.NullOrEmpty)
-            {
-                var emmiter = MyAudioComponent.TryGetSoundEmitter();
-                if (emmiter == null)
-                    return;
-                Vector3D pos;
-                b.ComputeWorldCenter(out pos);
-                emmiter.SetPosition(pos);
-                emmiter.PlaySound(destructionCue);
-            }
-        }
-
+        public List<MyFracturedBlock.Info> GetFracturedBlocks() { return m_fractureBlocksCache; }
+        private List<MyFracturedBlock.Info> m_fractureBlocksCache = new List<MyFracturedBlock.Info>();
         Dictionary<Vector3I, List<HkdShapeInstanceInfo>> m_fracturedBlocksShapes = new Dictionary<Vector3I, List<HkdShapeInstanceInfo>>();
         private void FindFracturedBlocks(HkdBreakableBodyInfo b)
         {
@@ -1448,7 +1450,7 @@ namespace Sandbox.Game.Entities.Cube
                 var blockPos = pProp.Value; //Vector3I.Round(child.GetTransform().Translation / m_grid.GridSize);
                 if (!m_grid.CubeExists(blockPos))
                 {
-                    Debug.Fail("FindFracturedBlocks:Fracture piece missing block");
+                    //Debug.Fail("FindFracturedBlocks:Fracture piece missing block");//safe to ignore
                     continue;
                 }
                 if (!m_fracturedBlocksShapes.ContainsKey(blockPos))
@@ -1495,7 +1497,7 @@ namespace Sandbox.Game.Entities.Cube
                 var originalBlock = m_grid.GetCubeBlock(key);
                 if (originalBlock == null)
                 {
-                    Debug.Fail("Missing fracture piece original block.");
+                    //Debug.Fail("Missing fracture piece original block.");//safe to ignore
                     shape.RemoveReference();
                     continue;
                 }
@@ -1523,8 +1525,7 @@ namespace Sandbox.Game.Entities.Cube
                     info.OriginalBlocks.Add(originalBlock.BlockDefinition.Id);
                     info.Orientations.Add(originalBlock.Orientation);
                 }
-
-                m_grid.AddFractureBlock(info);
+                m_fractureBlocksCache.Add(info);
             }
             m_fracturedBlocksShapes.Clear();
             m_children.Clear();
@@ -1549,7 +1550,8 @@ namespace Sandbox.Game.Entities.Cube
         {
             ProfilerShort.Begin("RecreateBody");
             bool wasfixed = RigidBody.IsFixedOrKeyframed;
-            if (m_newBreakableBodies.Count == 1)
+            var layer = RigidBody.Layer;
+            if (false)//m_newBreakableBodies.Count == 1) //jn: keeps crashing now, putting aside for release
             {
                 ProfilerShort.Begin("NewReplace");
                 ProfilerShort.Begin("Close");
@@ -1558,6 +1560,7 @@ namespace Sandbox.Game.Entities.Cube
                 CloseRigidBody();
                 ProfilerShort.BeginNextBlock("2");
                 BreakableBody = m_newBreakableBodies[0];
+                Debug.Assert(RigidBody.Layer == layer, "New body has different layer!!");
                 RigidBody.UserObject = this;
                 RigidBody.ContactPointCallbackEnabled = true;
                 RigidBody.ContactSoundCallbackEnabled = true;
@@ -1569,33 +1572,52 @@ namespace Sandbox.Game.Entities.Cube
                 for (int i = 0; i < m_childList.Count; i++) //remove fractures
                 {
                     var child = m_childList[i];
+                    Debug.Assert(((HkVec3IProperty)child.Shape.GetProperty(HkdBreakableShape.PROPERTY_GRID_POSITION)).IsValid());
                     if (child.Shape.IsFracturePiece())
                     {
-                        BreakableBody.BreakableShape.RemoveChild(i);
+                        //int j = 0;
+                        //for (; j < BreakableBody.BreakableShape.GetChildrenCount(); j++)
+                        //    if (BreakableBody.BreakableShape.GetChild(j).Shape == child.Shape)
+                        //        break;
+                        //Debug.Assert(child.Shape == BreakableBody.BreakableShape.GetChild(j).Shape && j >= i);
+                        //child.Shape.SetFlagRecursively(HkdBreakableShape.Flags.DONT_CREATE_FRACTURE_PIECE);
+
+                        //BreakableBody.BreakableShape.RemoveChild(j);
+
+                        //child.Shape.RemoveReference();
+                        //m_childList[i].Shape.RemoveReference();
+                        //m_childList[i].RemoveReference();
                         m_childList.RemoveAt(i);
                         i--;
                     }
                 }
-                m_childList.Clear();
-                foreach (var fb in m_grid.m_fractureBlocksCache) //add fractures grouped by block
+                foreach (var fb in m_fractureBlocksCache) //add fractures grouped by block
                 {
+                    Debug.Assert(fb.Shape.IsValid() && !((HkVec3IProperty)fb.Shape.GetProperty(HkdBreakableShape.PROPERTY_GRID_POSITION)).IsValid());
+                    fb.Shape.SetPropertyRecursively(HkdBreakableShape.PROPERTY_GRID_POSITION, new HkVec3IProperty(fb.Position));
                     Matrix m = Matrix.Identity;
                     m.Translation = fb.Position * m_grid.GridSize;
+                    fb.Shape.SetChildrenParent(fb.Shape);
                     var si = new HkdShapeInstanceInfo(fb.Shape, m);
-                    BreakableBody.BreakableShape.AddShape(ref si);
-                    si.RemoveReference();
+                    //BreakableBody.BreakableShape.AddShape(ref si);
+                    //si.RemoveReference();
+                    m_childList.Add(si);
                 }
+                BreakableBody.BreakableShape.ReplaceChildren(m_childList);
+                for (int i = m_childList.Count - m_fractureBlocksCache.Count; i < m_childList.Count; i++)
+                    m_childList[i].RemoveReference();
+                m_childList.Clear();
                 ProfilerShort.BeginNextBlock("Connections");
                 BreakableBody.BreakableShape.SetChildrenParent(BreakableBody.BreakableShape);
                 Shape.BreakableShape = BreakableBody.BreakableShape;
                 Shape.UpdateDirtyBlocks(m_dirtyCubesInfo.DirtyBlocks, false);
                 Shape.CreateConnectionToWorld(BreakableBody);
-                if(wasfixed)
+                if (wasfixed && m_grid.GridSizeEnum == MyCubeSize.Small)
                 {
-                    if(MyCubeGridSmallToLargeConnection.Static.CheckGridSmallToLargeConnect(m_grid));
+                    if (MyCubeGridSmallToLargeConnection.Static.TestGridSmallToLargeConnection(m_grid))
                     {
-                        RigidBody.Quality = HkCollidableQualityType.Fixed;
                         RigidBody.UpdateMotionType(HkMotionType.Fixed);
+                        RigidBody.Quality = HkCollidableQualityType.Fixed;
                     }
                 }
                 ProfilerShort.BeginNextBlock("Add");
@@ -1607,7 +1629,6 @@ namespace Sandbox.Game.Entities.Cube
             { //Old body is removed so create new one (should use matching one from new bodies in final version)
                 foreach (var b in m_newBreakableBodies)
                 {
-                    HavokWorld.DestructionWorld.RemoveBreakableBody(b);
                     MyFracturedPiecesManager.Static.ReturnToPool(b);
                 }
                 ProfilerShort.Begin("OldReplace");
@@ -1625,9 +1646,12 @@ namespace Sandbox.Game.Entities.Cube
                     CloseRigidBody();
                     var s = (HkShape)m_shape;
                     CreateBody(ref s, null);
+                    RigidBody.Layer = layer;
                     RigidBody.ContactPointCallbackEnabled = true;
                     RigidBody.ContactSoundCallbackEnabled = true;
                     RigidBody.ContactPointCallback += RigidBody_ContactPointCallback_Destruction;
+                    BreakableBody.BeforeControllerOperation += BreakableBody_BeforeControllerOperation;
+                    BreakableBody.AfterControllerOperation += BreakableBody_AfterControllerOperation;
                     Matrix m = Entity.PositionComp.WorldMatrix;
                     m.Translation = WorldToCluster(Entity.PositionComp.GetPosition());
                     RigidBody.SetWorldMatrix(m);
@@ -1648,6 +1672,7 @@ namespace Sandbox.Game.Entities.Cube
                 ProfilerShort.End();
             }
             m_newBreakableBodies.Clear();
+            m_fractureBlocksCache.Clear();
             ProfilerShort.End();
         }
 
@@ -1736,9 +1761,9 @@ namespace Sandbox.Game.Entities.Cube
                 MyPhysics.CastRay(MySector.MainCamera.Position, MySector.MainCamera.Position + MySector.MainCamera.ForwardVector * 25, hitlist, MyPhysics.CollisionLayerWithoutCharacter);
                 foreach (var h in hitlist)
                 {
-                    if (!(h.HkHitInfo.Body.GetEntity() is MyCubeGrid))
+                    if (!(h.HkHitInfo.GetHitEntity() is MyCubeGrid))
                         continue;
-                    var g = h.HkHitInfo.Body.GetEntity() as MyCubeGrid;
+                    var g = h.HkHitInfo.GetHitEntity() as MyCubeGrid;
                     bl = g.GetCubeBlock(g.WorldToGridInteger(h.Position + MySector.MainCamera.ForwardVector * 0.2f));
                     break;
                 }

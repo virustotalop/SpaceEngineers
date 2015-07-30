@@ -39,9 +39,10 @@ namespace Sandbox.Game.Entities
     using Sandbox.Game.Localization;
     using Sandbox.ModAPI;
     using VRage.Audio;
+    using VRage.ModAPI;
 
     [MyCubeBlockType(typeof(MyObjectBuilder_Thrust))]
-    class MyThrust : MyFunctionalBlock, IMyThrust
+    public class MyThrust : MyFunctionalBlock, IMyThrust
     {
         public struct FlameInfo
         {
@@ -95,8 +96,8 @@ namespace Sandbox.Game.Entities
         }
 
         private List<MyPhysics.HitInfo> m_gridRayCastLst;
-        private List<HkRigidBody> m_flameCollisionsList;
-        private List<Sandbox.ModAPI.IMyEntity> m_damagedEntities;
+        private List<HkBodyCollision> m_flameCollisionsList;
+        private List<IMyEntity> m_damagedEntities;
 
         public bool IsPowered
         {
@@ -105,12 +106,12 @@ namespace Sandbox.Game.Entities
 
         public float MaxPowerConsumption
         {
-            get { return m_thrustDefinition.MaxPowerConsumption; }
+            get { return m_thrustDefinition.MaxPowerConsumption * m_powerConsumptionMultiplier; }
         }
 
         public float MinPowerConsumption
         {
-            get { return m_thrustDefinition.MinPowerConsumption; }
+            get { return m_thrustDefinition.MinPowerConsumption * m_powerConsumptionMultiplier; }
         }
 
         public float CurrentStrength { get; set; }
@@ -118,7 +119,18 @@ namespace Sandbox.Game.Entities
         /// <summary>
         /// Overridden thrust in Newtons
         /// </summary>
-        public float ThrustOverride { get; private set; }
+        private float m_thrustOverride;
+        public float ThrustOverride 
+        {
+            get
+            {
+                return m_thrustOverride * m_thrustMultiplier;
+            }
+            private set
+            {
+                m_thrustOverride = value;
+            }
+        }
 
         protected override bool CheckIsWorking()
         {
@@ -224,8 +236,8 @@ namespace Sandbox.Game.Entities
         {
             Render.NeedsDrawFromParent = true;
             NeedsUpdate = MyEntityUpdateEnum.EACH_10TH_FRAME | MyEntityUpdateEnum.EACH_100TH_FRAME;
-            m_flameCollisionsList = new List<HkRigidBody>();
-            m_damagedEntities = new List<Sandbox.ModAPI.IMyEntity>();
+            m_flameCollisionsList = new List<HkBodyCollision>();
+            m_damagedEntities = new List<IMyEntity>();
             m_gridRayCastLst = new List<MyPhysics.HitInfo>();
             Render = new MyRenderComponentThrust();
             AddDebugRenderComponent(new MyDebugRenderComponentThrust(this));
@@ -273,6 +285,8 @@ namespace Sandbox.Game.Entities
 
             m_light.Start(MyLight.LightTypeEnum.PointLight, 1);
             SyncObject = new MySyncThruster(this);
+
+            UpdateDetailedInfo();
         }
 
         public override void OnRegisteredToGridSystems()
@@ -356,22 +370,27 @@ namespace Sandbox.Game.Entities
 
                     foreach (var obj in m_flameCollisionsList)
                     {
-                        var entity = obj.GetEntity();
-                        if (entity == null)
+                        var ent = obj.GetCollisionEntity();
+                        if (ent == null || ent.Equals(this))
                             continue;
-                        if (entity.Equals(this))
-                            continue;
-                        if(!(entity is MyCharacter))
-                            entity = entity.GetTopMostParent();
-                        if (m_damagedEntities.Contains(entity))
+
+                        if (!(ent is MyCharacter))
+                            ent = ent.GetTopMostParent();
+                        if (m_damagedEntities.Contains(ent))
                             continue;
                         else
-                            m_damagedEntities.Add(entity);
+                            m_damagedEntities.Add(ent);
 
-                        if (entity is IMyDestroyableObject)
-                            (entity as IMyDestroyableObject).DoDamage(flameInfo.Radius * m_thrustDefinition.FlameDamage * 10, MyDamageType.Environment, true);
-                        else if (entity is MyCubeGrid && MySession.Static.DestructibleBlocks)
-                            DamageGrid(flameInfo, l, entity as MyCubeGrid);
+                        if (ent is IMyDestroyableObject)
+                            (ent as IMyDestroyableObject).DoDamage(flameInfo.Radius * m_thrustDefinition.FlameDamage * 10, MyDamageType.Environment, true, attackerId: EntityId);
+                        else if (ent is MyCubeGrid)
+                        {
+                            var grid = ent as MyCubeGrid;
+                            if (grid.BlocksDestructionEnabled)
+                            {
+                                DamageGrid(flameInfo, l, grid);
+                            }
+                        }
                     }
                     m_damagedEntities.Clear();
                     m_flameCollisionsList.Clear();
@@ -391,7 +410,7 @@ namespace Sandbox.Game.Entities
             {
                 //MyRenderProxy.DebugDrawSphere(hit.Value, 0.1f, Color.Green.ToVector3(), 1, true);
                 MyPhysics.CastRay(hit.Value - l.Direction * 0.1f, hit.Value + l.Direction * 0.1f, m_gridRayCastLst, MyPhysics.ObjectDetectionCollisionLayer);
-                if ((m_gridRayCastLst.Count == 0 || m_gridRayCastLst[0].HkHitInfo.Body.GetEntity() != grid) && grid == CubeGrid)
+                if ((m_gridRayCastLst.Count == 0 || m_gridRayCastLst[0].HkHitInfo.GetHitEntity() != grid) && grid == CubeGrid)
                 {
                     m_gridRayCastLst.Clear();
                     return;
@@ -406,10 +425,13 @@ namespace Sandbox.Game.Entities
                     var gridDir = Vector3D.TransformNormal(l.Direction, invWorld);
                     if (block != null)
                         if (block.FatBlock != this && (CubeGrid.GridSizeEnum == MyCubeSize.Large || block.BlockDefinition.DeformationRatio > 0.25))
-                            block.DoDamage(30 * m_thrustDefinition.FlameDamage, MyDamageType.Environment);
+                        {
+                            block.DoDamage(30 * m_thrustDefinition.FlameDamage, MyDamageType.Environment, attackerId: EntityId);
+                        }
                     var areaPlanar = 0.5f * flameInfo.Radius * CubeGrid.GridSize;
                     var areaVertical = 0.5f * CubeGrid.GridSize;
-                    grid.Physics.ApplyDeformation(m_thrustDefinition.FlameDamage, areaPlanar, areaVertical, gridPos, gridDir, MyDamageType.Environment, CubeGrid.GridSizeEnum == MyCubeSize.Small ? 0.1f : 0);
+
+                    grid.Physics.ApplyDeformation(m_thrustDefinition.FlameDamage, areaPlanar, areaVertical, gridPos, gridDir, MyDamageType.Environment, CubeGrid.GridSizeEnum == MyCubeSize.Small ? 0.1f : 0, attackerId: EntityId);
                 }
             }
         }
@@ -462,6 +484,19 @@ namespace Sandbox.Game.Entities
             }
         }
 
+        private void UpdateDetailedInfo()
+        {
+            DetailedInfo.Clear();
+            DetailedInfo.AppendStringBuilder(MyTexts.Get(MySpaceTexts.BlockPropertiesText_Type));
+            DetailedInfo.Append(BlockDefinition.DisplayNameText);
+            DetailedInfo.AppendFormat("\n");
+            DetailedInfo.AppendStringBuilder(MyTexts.Get(MySpaceTexts.BlockPropertiesText_MaxRequiredInput));
+            MyValueFormatter.AppendWorkInBestUnit(MaxPowerConsumption, DetailedInfo);
+            DetailedInfo.AppendFormat("\n");
+
+            RaisePropertiesChanged();
+        }
+
         private string GetDirectionString()
         {
             var cockpit = MySession.ControlledEntity as MyCockpit;
@@ -507,6 +542,30 @@ namespace Sandbox.Game.Entities
                 {
                     m_thrustSystem.MarkDirty();
                 }
+            }
+        }
+
+        private float m_powerConsumptionMultiplier = 1f;
+        float Sandbox.ModAPI.IMyThrust.PowerConsumptionMultiplier
+        {
+            get
+            {
+                return m_powerConsumptionMultiplier;
+            }
+            set
+            {
+                m_powerConsumptionMultiplier = value;
+                if (m_powerConsumptionMultiplier < 0.01f)
+                {
+                    m_powerConsumptionMultiplier = 0.01f;
+                }
+
+                if (m_thrustSystem != null)
+                {
+                    m_thrustSystem.MarkDirty();
+                }
+
+                UpdateDetailedInfo();
             }
         }
     }

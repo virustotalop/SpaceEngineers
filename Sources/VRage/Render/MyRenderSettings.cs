@@ -19,6 +19,7 @@ namespace VRageRender
         public int BackBufferHeight;
         public int RefreshRate; // Used only in Fullscreen
         public bool VSync;
+        public bool DebugDrawOnly;
 
         public MyRenderDeviceSettings(int adapter, MyWindowModeEnum windowMode, int width, int height, int refreshRate, bool vsync)
         {
@@ -28,6 +29,8 @@ namespace VRageRender
             this.BackBufferHeight = height;
             this.RefreshRate = refreshRate;
             this.VSync = vsync;
+
+            DebugDrawOnly = false;
         }
 
         bool IEquatable<MyRenderDeviceSettings>.Equals(MyRenderDeviceSettings other)
@@ -166,7 +169,7 @@ namespace VRageRender
         public bool EnableSpotShadows = true;
 
         public bool VisualizeOverdraw = false;
-        
+       
         // Render interpolation time, lower time equals less smooth but more responsive
         // This value should be from interval (0, 2x update interval), good value is "update interval" + "upper usual update time"
         public float InterpolationLagMs = 22;
@@ -227,7 +230,7 @@ namespace VRageRender
         public float Cascade3SmallSkip = 8000.0f;
 
         public bool EnableTonemapping = true;
-        public bool ShowLuminanceHistogram = false;
+        public bool DispalyHdrDebug = false;
         public float AdaptationTau = 0.3f;
         public float LuminanceExposure = 0.51f;
         public float Contrast = 0.006f;
@@ -376,6 +379,7 @@ namespace VRageRender
             Cascade3SmallSkip = settings.Cascade3SmallSkip;
 
             EnableTonemapping = settings.EnableTonemapping;
+            DispalyHdrDebug = settings.DispalyHdrDebug;
             AdaptationTau = settings.AdaptationTau;
             LuminanceExposure = settings.LuminanceExposure;
             Contrast = settings.Contrast;
@@ -469,10 +473,17 @@ namespace VRageRender
     /// </summary>
     public struct MyRenderSettings1 : IEquatable<MyRenderSettings1>
     {
+        // Common
+        public bool InterpolationEnabled;
+
+        // DX9
+        public MyRenderQualityEnum Dx9Quality;
+
+        //Dx11; All new renderers should be designed with these in mind.
         public MyAntialiasingMode AntialiasingMode;
         public MyShadowsQuality ShadowQuality;
         public bool MultithreadingEnabled;
-        public bool InterpolationEnabled;
+        public bool TonemappingEnabled;
         public MyTextureQuality TextureQuality;
         public MyTextureAnisoFiltering AnisotropicFiltering;
         public MyFoliageDetails FoliageDetails;
@@ -484,10 +495,13 @@ namespace VRageRender
 
         public bool Equals(ref MyRenderSettings1 other)
         {
-            return AntialiasingMode == other.AntialiasingMode &&
+            return
+                InterpolationEnabled == other.InterpolationEnabled &&
+                Dx9Quality == other.Dx9Quality &&
+                AntialiasingMode == other.AntialiasingMode &&
                 ShadowQuality == other.ShadowQuality &&
                 MultithreadingEnabled == other.MultithreadingEnabled &&
-                InterpolationEnabled == other.InterpolationEnabled &&
+                TonemappingEnabled == other.TonemappingEnabled &&
                 TextureQuality == other.TextureQuality &&
                 AnisotropicFiltering == other.AnisotropicFiltering &&
                 FoliageDetails == other.FoliageDetails;

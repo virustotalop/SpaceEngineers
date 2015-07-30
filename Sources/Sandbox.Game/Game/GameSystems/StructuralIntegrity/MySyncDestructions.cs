@@ -2,7 +2,6 @@
 
 using ProtoBuf;
 using Sandbox.Common.ObjectBuilders;
-using Sandbox.Common.ObjectBuilders.Serializer;
 using Sandbox.Common.ObjectBuilders.VRageData;
 using Sandbox.Definitions;
 using Sandbox.Engine.Multiplayer;
@@ -42,7 +41,7 @@ namespace Sandbox.Game.Multiplayer
         [ProtoContract]
         struct CreateFracturePieceMsg
         {
-            [ProtoMember(1)]
+            [ProtoMember]
             public MyObjectBuilder_FracturedPiece FracturePiece;
 
             public override string ToString()
@@ -67,21 +66,14 @@ namespace Sandbox.Game.Multiplayer
         [ProtoContract]
         struct CreateFractureBlockMsg
         {
-            [ProtoMember(1)]
+            [ProtoMember]
             public MyObjectBuilder_FracturedBlock FracturedBlock;
 
-            [ProtoMember(2)]
+            [ProtoMember]
             public long Grid;
 
-            [ProtoMember(3)]
+            [ProtoMember]
             public Vector3I Position;
-        }
-
-        [MessageId(3251, P2PMessageEnum.Reliable)]
-        struct RemoveEnvironmentItemMsg
-        {
-            public long EntityId;
-            public int ItemInstanceId;
         }
 
         [MessageId(3253, P2PMessageEnum.Reliable)]
@@ -91,8 +83,6 @@ namespace Sandbox.Game.Multiplayer
             public long RemovedId;
         }
 
-        public static Action<MyEntity, int> OnRemoveEnvironmentItem;
-
         static MySyncDestructions()
         {
             //MySyncLayer.RegisterMessage<EnableGeneratorsMsg>(OnEnableGeneratorsMessage, MyMessagePermissions.Any, MyTransportMessageEnum.Request);
@@ -100,7 +90,7 @@ namespace Sandbox.Game.Multiplayer
             MySyncLayer.RegisterMessage<CreateFracturePieceMsg>(OnCreateFracturePieceMessage, MyMessagePermissions.Any, MyTransportMessageEnum.Request);
             MySyncLayer.RegisterMessage<RemoveFracturePieceMsg>(OnRemoveFracturePieceMessage, MyMessagePermissions.Any, MyTransportMessageEnum.Request);
             MySyncLayer.RegisterMessage<CreateFractureBlockMsg>(OnCreateFracturedBlockMessage, MyMessagePermissions.Any, MyTransportMessageEnum.Request);
-            MySyncLayer.RegisterMessage<RemoveEnvironmentItemMsg>(OnRemoveEnvironmentItemMessage, MyMessagePermissions.Any, MyTransportMessageEnum.Request);
+            
 
             MySyncLayer.RegisterMessage<FPManagerDbgMsg>(OnFPManagerDbgMessage, MyMessagePermissions.ToServer, MyTransportMessageEnum.Request);
         }
@@ -207,24 +197,6 @@ namespace Sandbox.Game.Multiplayer
                 grid.EnableGenerators(false, true);
                 grid.CreateFracturedBlock(msg.FracturedBlock, msg.Position);
                 grid.EnableGenerators(true, true);
-            }
-        }
-
-        public static void RemoveEnvironmentItem(long entityId, int itemInstanceId)
-        {
-            var msg = new RemoveEnvironmentItemMsg();
-            msg.EntityId = entityId;
-            msg.ItemInstanceId = itemInstanceId;
-            MySession.Static.SyncLayer.SendMessageToAll(ref msg);
-        }
-
-        static void OnRemoveEnvironmentItemMessage(ref RemoveEnvironmentItemMsg msg, MyNetworkClient sender)
-        {
-            MyEntity entity;
-            if (MyEntities.TryGetEntityById(msg.EntityId, out entity))
-            {
-                if (OnRemoveEnvironmentItem != null)
-                    OnRemoveEnvironmentItem(entity, msg.ItemInstanceId);
             }
         }
     }
